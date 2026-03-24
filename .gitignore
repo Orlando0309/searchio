@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Marcus
+.marcus/memory/
+.marcus/tasks/
+
+# OS
+.DS_Store
+Thumbs.db
