@@ -19,8 +19,14 @@ class TreeItem:
 class MemoryGraphWidget(ttk.Frame):
     """WizTree-style memory graph with tree view and size bars."""
     
+    # Dark theme colors
+    _BG_COLOR = '#1a1a2e'
+    _TREE_BG = '#16213e'
+    _TEXT_COLOR = '#eaeaea'
+    
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
+        self.configure(style='Dark.TFrame')
         
         # Treeview with columns for name, size, percent, and graph
         columns = ("name", "size", "percent", "files", "type", "graph")
@@ -37,7 +43,7 @@ class MemoryGraphWidget(ttk.Frame):
         
         # Configure column widths
         self.tree.column("#0", width=250, minwidth=150)
-        self.tree.column("name", width=0, stretch=False)  # Hidden, use #0 instead
+        self.tree.column("name", width=0, stretch=False)
         self.tree.column("size", width=100, minwidth=80)
         self.tree.column("percent", width=60, minwidth=50)
         self.tree.column("files", width=70, minwidth=60)
@@ -45,14 +51,14 @@ class MemoryGraphWidget(ttk.Frame):
         self.tree.column("graph", width=200, minwidth=150)
         
         # Scrollbars
-        vspinner = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.tree.yview)
-        hspinner = ttk.Scrollbar(self, orient=tk.HORIZONTAL, command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vspinner.set, xscrollcommand=hspinner.set)
+        vscroll = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.tree.yview)
+        hscroll = ttk.Scrollbar(self, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vscroll.set, xscrollcommand=hscroll.set)
         
         # Grid layout
         self.tree.grid(row=0, column=0, sticky="nsew")
-        vspinner.grid(row=0, column=1, sticky="ns")
-        hspinner.grid(row=1, column=0, sticky="ew")
+        vscroll.grid(row=0, column=1, sticky="ns")
+        hscroll.grid(row=1, column=0, sticky="ew")
         
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -65,20 +71,20 @@ class MemoryGraphWidget(ttk.Frame):
         
         # Color palette for size bars (WizTree-style gradient)
         self._bar_colors = [
-            '#2d5a87', '#3d7a97', '#4d9aa7', '#5dbab7',
-            '#6ddac7', '#7dfad7', '#8dfae7', '#9dfaf7',
-            '#e74c3c', '#e67e22', '#f1c40f', '#2ecc71'
+            '#e94560', '#0f3460', '#533483', '#16213e',
+            '#e94560', '#ff6b6b', '#ffd93d', '#6bcb77',
         ]
         
         # Bind double-click for drill-down
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         
-        # Style tags
-        self.tree.tag_configure("directory", foreground="#008080")
-        self.tree.tag_configure("file", foreground="#333333")
+        # Style tags - dark theme friendly
+        self.tree.tag_configure("directory", foreground="#48dbfb")
+        self.tree.tag_configure("file", foreground="#eaeaea")
         self.tree.tag_configure("large", font=('Segoe UI', 9, 'bold'))
-        self.tree.tag_configure("very_large", foreground='#e74c3c')
+        self.tree.tag_configure("very_large", foreground='#e94560')
+        self.tree.configure(background=self._TREE_BG, foreground=self._TEXT_COLOR)
     
     def set_click_callback(self, callback):
         """Set callback for node selection: callback(node)"""
@@ -94,15 +100,15 @@ class MemoryGraphWidget(ttk.Frame):
     def _get_bar_color(self, node: SizeNode, percent: float) -> str:
         """Get color for size bar based on percentage and type."""
         if percent > 10:
-            return '#e74c3c'  # Red for very large
+            return '#e94560'
         elif percent > 5:
-            return '#e67e22'  # Orange for large
+            return '#ff6b6b'
         elif percent > 1:
-            return '#f1c40f'  # Yellow for medium
+            return '#ffd93d'
         elif node.is_directory:
-            return '#3498db'  # Blue for directories
+            return '#48dbfb'
         else:
-            return '#2ecc71'  # Green for files
+            return '#6bcb77'
     
     def _create_size_bar(self, percent: float, color: str) -> str:
         """Create a text-based size bar visualization."""
@@ -111,19 +117,16 @@ class MemoryGraphWidget(ttk.Frame):
         if filled == 0 and percent > 0:
             filled = 1
         empty = bar_width - filled
-        # Use block characters for visual bar
         bar = '█' * filled + '░' * empty
         return bar
     
     def _populate_tree(self, node: SizeNode, parent_iid: str):
         """Recursively populate the tree view."""
-        # Calculate percentage
         if self._total_size > 0:
             percent = (node.size / self._total_size) * 100
         else:
             percent = 0.0
         
-        # Determine icon and tags
         if node.is_directory:
             icon = "📁"
             tags = ("directory",)
@@ -141,33 +144,21 @@ class MemoryGraphWidget(ttk.Frame):
             file_count = "1"
             node_type = node.name.split('.')[-1].upper() if '.' in node.name else "File"
         
-        # Get bar color and create size bar visualization
         bar_color = self._get_bar_color(node, percent)
         size_bar = self._create_size_bar(percent, bar_color)
         
-        # Insert item
         iid = self.tree.insert(
-            parent_iid,
-            tk.END,
+            parent_iid, tk.END,
             text=f"{icon} {node.name}",
-            values=(
-                node.name,
-                format_size(node.size),
-                f"{percent:.1f}%",
-                file_count,
-                node_type,
-                size_bar
-            ),
+            values=(node.name, format_size(node.size), f"{percent:.1f}%",
+                    file_count, node_type, size_bar),
             tags=tags
         )
         
-        # Store node mapping
         self._node_map[iid] = node
         
-        # Recurse into children (sorted by size, largest first)
         if node.is_directory and node.children:
             sorted_children = sorted(node.children, key=lambda c: c.size, reverse=True)
-            # Only expand top 100 children to avoid UI lag
             for child in sorted_children[:100]:
                 self._populate_tree(child, iid)
     
@@ -181,7 +172,6 @@ class MemoryGraphWidget(ttk.Frame):
         node = self._node_map.get(item_id)
         
         if node and node.is_directory and node.children:
-            # Toggle expand/collapse
             if self.tree.item(item_id, "open"):
                 self.tree.item(item_id, open=False)
             else:
@@ -223,6 +213,7 @@ class MemoryGraphPanel(ttk.Frame):
     
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
+        self.configure(style='Dark.TFrame')
         
         # Top toolbar
         toolbar = ttk.Frame(self)
@@ -276,9 +267,7 @@ class MemoryGraphPanel(ttk.Frame):
         if node:
             self.selected_var.set(f"Selected: {node.name} - {format_size(node.size)}")
             
-            # Auto-expand large directories on double-click
             if node.is_directory and node.children:
-                # Find the item in tree and expand it
                 for iid, stored_node in self.graph._node_map.items():
                     if stored_node is node:
                         self.graph.tree.item(iid, open=True)

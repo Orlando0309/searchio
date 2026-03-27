@@ -112,26 +112,17 @@ class FileIndexer:
         items_indexed = 0
         
         def should_skip(path: Path) -> bool:
-            return any(part.startswith('.') or part in exclude_dirs for part in path.parts)
-        
-        # First, index the root directory itself
-        try:
-            stat = root.stat()
-            file_info = FileInfo(
-                path=str(root),
-                name=root.name,
-                extension='',
-                size=0,
-                modified_time=stat.st_mtime,
-                indexed_time=datetime.now().timestamp(),
-                parent_dir=str(root.parent),
-                depth=0,
-                is_directory=True
-            )
-            self._index_file(file_info)
-            items_indexed += 1
-        except (OSError, PermissionError):
-            pass
+            # Skip hidden files/dirs, common exclude dirs, and database files
+            if any(part.startswith('.') or part in exclude_dirs for part in path.parts):
+                return True
+            # Skip database files to avoid indexing our own index (including WAL artifacts)
+            suffix = path.suffix.lower()
+            if suffix == '.db' or path.name.endswith('.db-wal') or path.name.endswith('.db-shm'):
+                return True
+            # Skip the indexer's own database file by exact path match
+            if str(path) == self.db_path:
+                return True
+            return False
         
         for file_path in root.rglob('*'):
             if self._stop_flag.is_set():
@@ -140,10 +131,14 @@ class FileIndexer:
             if should_skip(file_path):
                 continue
             
+            # Skip directories - only index files
+            if file_path.is_dir():
+                continue
+            
             try:
                 rel_path = file_path.relative_to(root)
                 stat = file_path.stat()
-                is_dir = file_path.is_dir()
+                is_dir = False
                 
                 file_info = FileInfo(
                     path=str(file_path),
@@ -187,6 +182,7 @@ class FileIndexer:
         """
         stats = {'added': 0, 'removed': 0, 'updated': 0}
         root = Path(root_path).resolve()
+        exclude_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv'}
         
         # Get all currently indexed paths under root
         with self._lock:
@@ -196,19 +192,39 @@ class FileIndexer:
             )
             indexed = {row[0]: row[1] for row in cursor.fetchall()}
         
+        def should_skip(path: Path) -> bool:
+            # Skip hidden files/dirs, common exclude dirs, and database files
+            if any(part.startswith('.') or part in exclude_dirs for part in path.parts):
+                return True
+            # Skip database files to avoid indexing our own index (including WAL artifacts)
+            suffix = path.suffix.lower()
+            if suffix == '.db' or path.name.endswith('.db-wal') or path.name.endswith('.db-shm'):
+                return True
+            # Skip the indexer's own database file by exact path match
+            if str(path) == self.db_path:
+                return True
+            return False
+        
         # Scan for new/modified files
         current_items = set()
         for file_path in root.rglob('*'):
             if self._stop_flag.is_set():
                 break
             
+            if should_skip(file_path):
+                continue
+            
             path_str = str(file_path)
             current_items.add(path_str)
             
             try:
+                # Skip directories - only index files (consistent with scan_directory)
+                if file_path.is_dir():
+                    continue
+                    
                 stat = file_path.stat()
                 mtime = stat.st_mtime
-                is_dir = file_path.is_dir()
+                is_dir = False
                 
                 if path_str not in indexed:
                     # New item
@@ -290,22 +306,40 @@ class FileIndexer:
                 # Convert glob to LIKE pattern for simple cases
                 # *.go -> %.go
                 like_pattern = query.replace('*', '%').replace('?', '_')
-                cursor = self.conn.execute("""
-                    SELECT path, name, extension, size, modified_time, indexed_time, parent_dir, depth, is_directory
-                    FROM files 
-                    WHERE name LIKE ? ESCAPE '\\'
-                    ORDER BY is_directory DESC, modified_time DESC
-                    LIMIT ?
-                """, (like_pattern, limit))
+                if extension_filter:
+                    cursor = self.conn.execute("""
+                        SELECT path, name, extension, size, modified_time, indexed_time, parent_dir, depth, is_directory
+                        FROM files 
+                        WHERE name LIKE ? ESCAPE '\\' AND extension = ?
+                        ORDER BY is_directory DESC, modified_time DESC
+                        LIMIT ?
+                    """, (like_pattern, extension_filter.lower(), limit))
+                else:
+                    cursor = self.conn.execute("""
+                        SELECT path, name, extension, size, modified_time, indexed_time, parent_dir, depth, is_directory
+                        FROM files 
+                        WHERE name LIKE ? ESCAPE '\\'
+                        ORDER BY is_directory DESC, modified_time DESC
+                        LIMIT ?
+                    """, (like_pattern, limit))
             else:
                 # Regular substring search
-                cursor = self.conn.execute("""
-                    SELECT path, name, extension, size, modified_time, indexed_time, parent_dir, depth, is_directory
-                    FROM files 
-                    WHERE name LIKE ?
-                    ORDER BY is_directory DESC, modified_time DESC
-                    LIMIT ?
-                """, (f'%{query}%', limit))
+                if extension_filter:
+                    cursor = self.conn.execute("""
+                        SELECT path, name, extension, size, modified_time, indexed_time, parent_dir, depth, is_directory
+                        FROM files 
+                        WHERE name LIKE ? AND extension = ?
+                        ORDER BY is_directory DESC, modified_time DESC
+                        LIMIT ?
+                    """, (f'%{query}%', extension_filter.lower(), limit))
+                else:
+                    cursor = self.conn.execute("""
+                        SELECT path, name, extension, size, modified_time, indexed_time, parent_dir, depth, is_directory
+                        FROM files 
+                        WHERE name LIKE ?
+                        ORDER BY is_directory DESC, modified_time DESC
+                        LIMIT ?
+                    """, (f'%{query}%', limit))
             
             for row in cursor.fetchall():
                 results.append(FileInfo(
