@@ -1,5 +1,6 @@
 """High-performance file indexer with incremental updates."""
 
+import logging
 import os
 import re
 import fnmatch
@@ -10,6 +11,8 @@ from datetime import datetime
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass
 import threading
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,6 +39,13 @@ class FileIndexer:
         self.conn = self._init_database()
         self._lock = threading.Lock()
         self._stop_flag = threading.Event()
+        # Import Database for content indexing (optional - may not exist in test environments)
+        self.db = None
+        try:
+            from core.database import Database
+            self.db = Database(db_path=Path(self.db_path))
+        except Exception:
+            pass  # Content indexing unavailable if Database tables don't exist
         
     def _ensure_db_dir(self):
         """Ensure database directory exists."""
@@ -107,6 +117,7 @@ class FileIndexer:
         
         Returns number of items indexed.
         """
+        logger.info(f"Starting directory scan: {root_path}")
         exclude_dirs = exclude_dirs or {'.git', '__pycache__', 'node_modules', '.venv', 'venv'}
         root = Path(root_path).resolve()
         items_indexed = 0
@@ -162,7 +173,32 @@ class FileIndexer:
                 continue
         
         self.conn.commit()
+        logger.info(f"Directory scan complete: {items_indexed} items indexed")
         return items_indexed
+    
+    def _extract_content_words(self, file_path: str, file_size: int) -> Dict[str, List[int]]:
+        """Extract words and their positions from file content."""
+        words_dict: Dict[str, List[int]] = {}
+        try:
+            # Skip binary files and large files
+            if file_size > 1024 * 1024:  # 1MB limit
+                return words_dict
+            
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            
+            # Extract words (alphanumeric sequences, min 3 chars)
+            word_pattern = re.compile(r'\b[a-zA-Z0-9]{3,}\b')
+            for match in word_pattern.finditer(content):
+                word = match.group().lower()
+                pos = match.start()
+                if word not in words_dict:
+                    words_dict[word] = []
+                words_dict[word].append(pos)
+        except (IOError, UnicodeDecodeError):
+            pass
+        
+        return words_dict
     
     def _index_file(self, info: FileInfo):
         """Insert or update a file/folder in the index."""
@@ -174,12 +210,30 @@ class FileIndexer:
             """, (info.path, info.name, info.extension, info.size, 
                   info.modified_time, info.indexed_time, info.parent_dir, info.depth,
                   1 if info.is_directory else 0))
+            self.conn.commit()
+        
+        # Index file content for non-directory files
+        if not info.is_directory and info.size > 0 and self.db is not None:
+            try:
+                # Get file_id from database
+                file_record = self.db.get_file_by_path(info.path)
+                if file_record:
+                    file_id = file_record['id']
+                    # Clear old content index
+                    self.db.clear_file_index(file_id)
+                    # Extract and add new content words
+                    words = self._extract_content_words(info.path, info.size)
+                    if words:
+                        self.db.add_content_words(file_id, words)
+            except Exception:
+                pass  # Continue indexing even if content extraction fails
     
     def incremental_update(self, root_path: str, progress_callback=None) -> Dict[str, int]:
         """Update index incrementally - only process changed files.
         
         Returns dict with 'added', 'removed', 'updated' counts.
         """
+        logger.info(f"Starting incremental update: {root_path}")
         stats = {'added': 0, 'removed': 0, 'updated': 0}
         root = Path(root_path).resolve()
         exclude_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv'}
@@ -271,6 +325,7 @@ class FileIndexer:
             stats['removed'] = len(removed_paths)
         
         self.conn.commit()
+        logger.info(f"Incremental update complete: +{stats['added']} ~{stats['updated']} -{stats['removed']}")
         return stats
     
     def _is_glob_pattern(self, query: str) -> bool:
@@ -377,25 +432,30 @@ class FileIndexer:
             return results
     
     def search_by_content(self, query: str, limit: int = 100) -> List[FileInfo]:
-        """Full-text search on file names using FTS."""
-        with self._lock:
-            cursor = self.conn.execute("""
-                SELECT f.path, f.name, f.extension, f.size, f.modified_time, f.indexed_time, f.parent_dir, f.depth, f.is_directory
-                FROM files f
-                JOIN files_fts fts ON f.rowid = fts.rowid
-                WHERE files_fts MATCH ?
-                ORDER BY f.is_directory DESC, f.modified_time DESC
-                LIMIT ?
-            """, (query, limit))
-            
-            results = []
-            for row in cursor.fetchall():
-                results.append(FileInfo(
-                    path=row[0], name=row[1], extension=row[2],
-                    size=row[3], modified_time=row[4], indexed_time=row[5],
-                    parent_dir=row[6], depth=row[7], is_directory=bool(row[8])
-                ))
-            return results
+        """Search file contents using the content_index table."""
+        if self.db is None:
+            return []  # Content indexing not available
+        
+        # Split query into words for content search
+        words = [w.lower() for w in query.split() if len(w) >= 3]
+        if not words:
+            words = [query.lower()]
+        
+        # Use Database's search_content method
+        try:
+            results_data = self.db.search_content(words, limit)
+        except Exception:
+            return []  # Content search unavailable
+        
+        results = []
+        for row in results_data:
+            results.append(FileInfo(
+                path=row['path'], name=row['name'], extension=row['extension'],
+                size=row['size'], modified_time=row['modified_time'], 
+                indexed_time=row['indexed_time'], parent_dir=row['parent_dir'], 
+                depth=0, is_directory=bool(row.get('is_directory', 0))
+            ))
+        return results
     
     def get_stats(self) -> Dict:
         """Get index statistics."""

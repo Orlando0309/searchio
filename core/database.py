@@ -1,4 +1,5 @@
 # Database operations for file index
+import logging
 import sqlite3
 import json
 from pathlib import Path
@@ -6,7 +7,9 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from contextlib import contextmanager
 
-from ..config import INDEX_DB_PATH
+from config import INDEX_DB_PATH
+
+logger = logging.getLogger(__name__)
 
 
 class Database:

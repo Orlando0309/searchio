@@ -45,17 +45,7 @@ IGNORED_DIRECTORIES = {
     "node_modules", "packages", "site-packages",
 }
 
-# Extensions to skip entirely
-IGNORED_EXTENSIONS = {
-    ".pyc", ".pyo", ".o", ".obj", ".class", ".jar", ".war",
-    ".dll", ".exe", ".so", ".dylib", ".a", ".lib",
-    ".zip", ".tar", ".gz", ".rar", ".7z", ".bz2", ".xz",
-    ".mp3", ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv",
-    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg", ".webp",
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-    ".iso", ".img", ".dmg", ".pkg", ".deb", ".rpm",
-    ".log", ".tmp", ".temp", ".bak", ".swp", ".swo",
-}
+
 
 # Search settings
 SEARCH_RESULTS_LIMIT = 100

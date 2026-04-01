@@ -11,9 +11,10 @@ import re
 from core.indexer import FileIndexer
 from core.background_indexer import BackgroundIndexer
 from core.size_analyzer import SizeAnalyzer, SizeNode, get_drives_for_analysis, format_size
+from core.search_history import SearchHistory
 from gui.treemap_widget import TreemapPanel
 from gui.memory_graph_widget import MemoryGraphPanel
-from config import APP_NAME, APP_VERSION
+from config import APP_NAME, APP_VERSION  # Root level config import
 
 
 class MainWindow:
@@ -28,9 +29,12 @@ class MainWindow:
         self.root.minsize(600, 400)
         
         self._search_after_id = None
+        self._content_search_var = tk.BooleanVar(value=False)
         self.size_analyzer = SizeAnalyzer()
+        self.search_history = SearchHistory()
         self.treemap_panel = None
         self.memory_graph_panel = None
+        self._history_popup = None
         
         self._setup_styles()
         self._setup_ui()
@@ -88,6 +92,14 @@ class MainWindow:
         ttk.Label(search_input_frame, text="Search:").pack(side=tk.LEFT)
         self.search_input = ttk.Entry(search_input_frame, width=50)
         self.search_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        
+        # History button
+        self.history_btn = ttk.Button(search_input_frame, text="🕐", width=3, command=self._show_history)
+        self.history_btn.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Content search toggle
+        self.content_search_cb = ttk.Checkbutton(search_input_frame, text="Content", variable=self._content_search_var)
+        self.content_search_cb.pack(side=tk.LEFT, padx=(10, 0))
         
         # Hint label for search patterns
         hint_label = ttk.Label(search_input_frame, text="(use *.ext for glob, or /regex/ for regex)", foreground="gray")
@@ -160,6 +172,13 @@ class MainWindow:
         self.search_input.bind("<KeyRelease>", self._on_search_typing)
         self.search_input.bind("<Return>", lambda e: self._do_search())
         
+        # Show history on focus
+        self.search_input.bind("<FocusIn>", lambda e: self._show_history())
+        # Remove FocusOut - use click-outside detection instead
+        
+        # Bind click on main window to close history popup
+        self.root.bind("<Button-1>", self._on_root_click)
+        
         # Populate drives on tab change
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
     
@@ -226,7 +245,10 @@ class MainWindow:
             return
         
         # Determine search type
-        if self._is_regex_pattern(query):
+        if self._content_search_var.get():
+            # Search in file contents
+            results = self.indexer.search_by_content(query)
+        elif self._is_regex_pattern(query):
             regex_pattern = query[1:-1]
             results = self.indexer.search_regex(regex_pattern)
         elif self.indexer._is_glob_pattern(query):
@@ -236,6 +258,10 @@ class MainWindow:
         
         self._display_results(results, query)
         self.status_var.set(f"Found {len(results)} results")
+        
+        # Save to history
+        search_type = 'content' if self._content_search_var.get() else 'regex' if self._is_regex_pattern(query) else 'glob' if self.indexer._is_glob_pattern(query) else 'name'
+        self.search_history.add_entry(query, len(results), search_type)
     
     def _clear_results(self):
         """Clear all results from the tree."""
@@ -387,8 +413,88 @@ class MainWindow:
         """Start the main event loop."""
         self.root.mainloop()
     
+    def _show_history(self):
+        """Show search history popup."""
+        if self._history_popup and self._history_popup.winfo_exists():
+            return  # Already open, don't recreate
+        
+        # Create popup window
+        self._history_popup = tk.Toplevel(self.root)
+        self._history_popup.title("Search History")
+        self._history_popup.overrideredirect(True)
+        self._history_popup.attributes('-topmost', True)
+        
+        # Position below search input
+        x = self.search_input.winfo_rootx()
+        y = self.search_input.winfo_rooty() + self.search_input.winfo_height() + 2
+        self._history_popup.geometry(f"+{x}+{y}")
+        
+        # Bind click on popup to mark it as active (prevent closing)
+        self._history_popup.bind("<Button-1>", lambda e: self._popup_clicked())
+        
+        # Create history list
+        history_frame = ttk.Frame(self._history_popup, relief="solid", borderwidth=1)
+        history_frame.pack(fill=tk.BOTH, expand=True)
+        
+        entries = self.search_history.get_recent(10)
+        if not entries:
+            ttk.Label(history_frame, text="No recent searches", foreground="gray").pack(padx=10, pady=10)
+        else:
+            for entry in entries:
+                btn = ttk.Button(
+                    history_frame,
+                    text=f"{entry.query} ({entry.result_count} results)",
+                    command=lambda q=entry.query: self._select_history_item(q),
+                    width=50
+                )
+                btn.pack(fill=tk.X, padx=5, pady=2)
+        
+        # Clear history button
+        if entries:
+            clear_btn = ttk.Button(
+                history_frame,
+                text="Clear History",
+                command=self._clear_history,
+                width=50
+            )
+            clear_btn.pack(fill=tk.X, padx=5, pady=5)
+    
+    def _popup_clicked(self):
+        """Mark popup as recently clicked to prevent immediate close."""
+        self._popup_active = True
+        self.root.after(200, lambda: setattr(self, '_popup_active', False))
+    
+    def _on_root_click(self, event):
+        """Handle clicks on main window - close history popup if clicking outside."""
+        if self._history_popup and self._history_popup.winfo_exists():
+            # Check if click is outside the popup
+            if not getattr(self, '_popup_active', False):
+                self._hide_history()
+    
+    def _hide_history(self):
+        """Hide search history popup."""
+        if self._history_popup and self._history_popup.winfo_exists():
+            popup = self._history_popup
+            self._history_popup = None
+            popup.destroy()
+    
+    def _select_history_item(self, query: str):
+        """Select a history item and execute search."""
+        self.search_input.delete(0, tk.END)
+        self.search_input.insert(0, query)
+        self._hide_history()
+        self._do_search()
+        self.search_input.focus_set()  # Return focus to search input
+    
+    def _clear_history(self):
+        """Clear search history."""
+        self.search_history.clear()
+        self._hide_history()  # Close popup after clearing
+    
     def close(self):
         """Clean up resources."""
         self.bg_indexer.stop()
         self.indexer.close()
         self.size_analyzer.stop()
+        if self._history_popup and self._history_popup.winfo_exists():
+            self._history_popup.destroy()

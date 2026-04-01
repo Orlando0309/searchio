@@ -1,5 +1,6 @@
 """Background indexer for automatic drive scanning and periodic updates."""
 
+import logging
 import os
 import platform
 import threading
@@ -9,6 +10,8 @@ from typing import Callable, List, Optional, Set
 from dataclasses import dataclass
 
 from .indexer import FileIndexer
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -148,12 +151,14 @@ class BackgroundIndexer:
         self._status_callback = callback
     
     def _report_status(self, message: str):
-        """Report status to callback."""
+        """Report status to callback and log."""
+        logger.info(message)
         if self._status_callback:
             self._status_callback(message)
     
     def _report_progress(self, count: int, current_path: str):
-        """Report progress to callback."""
+        """Report progress to callback and log."""
+        logger.debug(f"Progress: {count} items, current: {current_path}")
         if self._progress_callback:
             self._progress_callback(count, current_path)
     

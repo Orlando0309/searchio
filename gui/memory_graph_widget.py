@@ -84,7 +84,12 @@ class MemoryGraphWidget(ttk.Frame):
         self.tree.tag_configure("file", foreground="#eaeaea")
         self.tree.tag_configure("large", font=('Segoe UI', 9, 'bold'))
         self.tree.tag_configure("very_large", foreground='#e94560')
-        self.tree.configure(background=self._TREE_BG, foreground=self._TEXT_COLOR)
+        
+        # Configure ttk style for dark theme (ttk widgets require styles, not direct configure)
+        style = ttk.Style()
+        style.configure('Dark.Treeview', background=self._TREE_BG, foreground=self._TEXT_COLOR, fieldbackground=self._TREE_BG)
+        style.configure('Dark.Treeview.Heading', background=self._TREE_BG, foreground=self._TEXT_COLOR)
+        self.tree.configure(style='Dark.Treeview')
     
     def set_click_callback(self, callback):
         """Set callback for node selection: callback(node)"""
