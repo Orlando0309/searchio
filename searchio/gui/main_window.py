@@ -160,6 +160,15 @@ class MainWindow:
         self.file_type_combo.pack(side=tk.LEFT, padx=(10, 0))
         self.file_type_combo.bind("<<ComboboxSelected>>", lambda e: self._do_search())
         
+        # Path scope filter
+        self.scope_var = tk.StringVar()
+        self.scope_btn = ttk.Button(search_input_frame, text="📂", width=3, command=self._set_scope)
+        self.scope_btn.pack(side=tk.LEFT, padx=(5, 0))
+        self._add_tooltip(self.scope_btn, "Set search scope (directory)")
+        self.clear_scope_btn = ttk.Button(search_input_frame, text="✕", width=2, command=self._clear_scope)
+        self.clear_scope_btn.pack(side=tk.LEFT, padx=(2, 0))
+        self._add_tooltip(self.clear_scope_btn, "Clear search scope")
+        
         # Hint label for search patterns
         hint_label = ttk.Label(search_input_frame, text="(use *.ext for glob, or /regex/ for regex)", foreground="gray")
         hint_label.pack(side=tk.LEFT, padx=(10, 0))
@@ -229,14 +238,25 @@ class MainWindow:
         self.preview_text.configure(yscrollcommand=preview_scroll.set)
         preview_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Empty state label (shown when no results)
+        # Empty state frame with icon and message
+        self.empty_state_frame = ttk.Frame(search_frame)
+        self.empty_state_frame.pack(pady=60)
+        
+        self.empty_state_icon = ttk.Label(self.empty_state_frame, text="🔍", font=('Segoe UI', 48))
+        self.empty_state_icon.pack()
+        
         self.empty_state_var = tk.StringVar(value="Type to search across indexed files")
-        self.empty_state_label = ttk.Label(search_frame, textvariable=self.empty_state_var, 
-                                           font=('Segoe UI', 11), foreground="gray", justify=tk.CENTER)
-        self.empty_state_label.pack(pady=40)
+        self.empty_state_label = ttk.Label(self.empty_state_frame, textvariable=self.empty_state_var, 
+                                           font=('Segoe UI', 12), foreground="#888888", justify=tk.CENTER)
+        self.empty_state_label.pack(pady=(10, 0))
+        
+        self.empty_state_hint = ttk.Label(self.empty_state_frame, 
+                                           text="Try: *.py for Python files  |  /pattern/ for regex  |  Toggle Content for full-text",
+                                           font=('Segoe UI', 9), foreground="#aaaaaa", justify=tk.CENTER)
+        self.empty_state_hint.pack(pady=(5, 0))
         
         # Raise empty state above results_paned when visible
-        self.empty_state_label.lift()
+        self.empty_state_frame.lift()
         
         # Preview toggle button
         self.preview_visible = tk.BooleanVar(value=False)
@@ -385,6 +405,23 @@ class MainWindow:
         """Check if query is a regex pattern enclosed in slashes."""
         return query.startswith('/') and query.endswith('/') and len(query) > 2
     
+    def _set_scope(self):
+        """Set a directory scope for limiting searches."""
+        from tkinter import filedialog
+        directory = filedialog.askdirectory(title="Select Search Scope")
+        if directory:
+            self.scope_var.set(directory)
+            self.status_var.set(f"Search scope: {directory}")
+            self.status_bar_var.set(f"Scope: {directory}")
+            self._do_search()
+    
+    def _clear_scope(self):
+        """Clear the search scope."""
+        self.scope_var.set("")
+        self.status_var.set("Search scope cleared")
+        self.status_bar_var.set("Ready")
+        self._do_search()
+    
     def _do_search(self):
         """Execute the search and display results."""
         self._search_after_id = None
@@ -406,6 +443,11 @@ class MainWindow:
             results = self.indexer.search(query)
         else:
             results = self.indexer.search(query)
+        
+        # Apply path scope filter
+        scope = self.scope_var.get()
+        if scope:
+            results = [r for r in results if str(r.path).startswith(scope)]
         
         # Apply file type filter
         filter_type = self.file_type_var.get()
@@ -521,11 +563,12 @@ class MainWindow:
         
         if not results and query is not None:
             self.empty_state_var.set(f'No results found for "{query}"')
-            self.empty_state_label.pack(pady=40)
-            self.empty_state_label.lift()
+            self.empty_state_hint.configure(text="Try adjusting filters or search scope")
+            self.empty_state_frame.pack(pady=60)
+            self.empty_state_frame.lift()
             return
         else:
-            self.empty_state_label.pack_forget()
+            self.empty_state_frame.pack_forget()
         
         for i, file_info in enumerate(results):
             icon = self._get_file_icon(file_info.is_directory, file_info.extension)
@@ -1004,6 +1047,8 @@ class MainWindow:
             ("Desktop", Path.home() / "Desktop"),
             ("Documents", Path.home() / "Documents"),
             ("Downloads", Path.home() / "Downloads"),
+            ("Pictures", Path.home() / "Pictures"),
+            ("Videos", Path.home() / "Videos"),
             ("Home", Path.home()),
             ("Project Root", Path.cwd()),
         ]
@@ -1180,8 +1225,9 @@ class MainWindow:
         self.status_var.set("Ready")
         self.status_bar_var.set("Ready")
         self.empty_state_var.set("Type to search across indexed files")
-        self.empty_state_label.pack(pady=40)
-        self.empty_state_label.lift()
+        self.empty_state_hint.configure(text="Try: *.py for Python files  |  /pattern/ for regex  |  Toggle Content for full-text")
+        self.empty_state_frame.pack(pady=60)
+        self.empty_state_frame.lift()
         self.search_input.focus_set()
         self.root.title(f"{APP_NAME} v{APP_VERSION}")
     
