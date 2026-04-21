@@ -27,7 +27,7 @@ class MainWindow:
         self.bg_indexer = BackgroundIndexer(self.indexer, update_interval=300)  # 5 min updates
         self.root = tk.Tk()
         self.root.title(f"{APP_NAME} v{APP_VERSION}")
-        self.root.geometry("900x600")
+        self._load_geometry()
         self.root.minsize(600, 400)
         
         self._search_after_id = None
@@ -59,6 +59,8 @@ class MainWindow:
         
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Export Results...", command=self._export_results)
+        file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit, accelerator="Alt+F4")
         
         view_menu = tk.Menu(menubar, tearoff=0)
@@ -66,6 +68,7 @@ class MainWindow:
         view_menu.add_command(label="Clear Search", command=self._clear_search, accelerator="Esc")
         view_menu.add_separator()
         view_menu.add_command(label="Focus Search", command=self.search_input.focus_set, accelerator="Ctrl+K")
+        view_menu.add_command(label="Copy Path", command=self._copy_selected_path, accelerator="Ctrl+C")
         
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
@@ -135,6 +138,13 @@ class MainWindow:
         self.content_search_cb = ttk.Checkbutton(search_input_frame, text="Content", variable=self._content_search_var)
         self.content_search_cb.pack(side=tk.LEFT, padx=(10, 0))
         
+        # File type filter
+        self.file_type_var = tk.StringVar(value="All")
+        self.file_type_combo = ttk.Combobox(search_input_frame, textvariable=self.file_type_var,
+                                             values=["All", "Files", "Directories"], state="readonly", width=10)
+        self.file_type_combo.pack(side=tk.LEFT, padx=(10, 0))
+        self.file_type_combo.bind("<<ComboboxSelected>>", lambda e: self._do_search())
+        
         # Hint label for search patterns
         hint_label = ttk.Label(search_input_frame, text="(use *.ext for glob, or /regex/ for regex)", foreground="gray")
         hint_label.pack(side=tk.LEFT, padx=(10, 0))
@@ -167,10 +177,11 @@ class MainWindow:
         self.results_tree.column("modified", width=140, minwidth=100)
         
         # Configure tags for styling
-        self.results_tree.tag_configure("directory", foreground="#008080", font=('Segoe UI', 9, 'bold'))
+        self.results_tree.tag_configure("directory", foreground="#006666", font=('Segoe UI', 9, 'bold'))
         self.results_tree.tag_configure("file", foreground="#333333")
-        self.results_tree.tag_configure("evenrow", background="#f5f5f5")
+        self.results_tree.tag_configure("evenrow", background="#f8f9fa")
         self.results_tree.tag_configure("oddrow", background="#ffffff")
+        self.results_tree.tag_configure("selected", background="#cce5ff")
         
         # Scrollbar
         scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
@@ -244,6 +255,8 @@ class MainWindow:
         self.root.bind("<Control-k>", lambda e: self.search_input.focus_set())
         self.root.bind("<Escape>", self._on_escape)
         self.results_tree.bind("<Control-c>", lambda e: self._copy_selected_path())
+        self.results_tree.bind("<Control-o>", lambda e: self._open_file(self._get_selected_path() or ""))
+        self.results_tree.bind("<Control-r>", lambda e: self._reveal_in_explorer(self._get_selected_path() or ""))
         self.results_tree.bind("<Return>", lambda e: self._on_double_click(None))
         
         # Keyboard navigation: Down arrow from search input moves to results
@@ -330,6 +343,13 @@ class MainWindow:
             results = self.indexer.search(query)
         else:
             results = self.indexer.search(query)
+        
+        # Apply file type filter
+        filter_type = self.file_type_var.get()
+        if filter_type == "Files":
+            results = [r for r in results if not r.is_directory]
+        elif filter_type == "Directories":
+            results = [r for r in results if r.is_directory]
         
         self._display_results(results, query)
         self.status_var.set(f"Found {len(results)} results")
@@ -456,6 +476,7 @@ class MainWindow:
             self.results_tree.focus_set()
             self.results_tree.selection_set(children[0])
             self.results_tree.focus(children[0])
+            self.results_tree.see(children[0])
         return "break"
     
     def _on_tree_up_arrow(self, event):
@@ -517,6 +538,25 @@ class MainWindow:
             self.status_var.set("Path copied to clipboard")
             self.status_bar_var.set("Path copied to clipboard")
     
+    def _copy_selected_filename(self):
+        """Copy the selected result's filename to the clipboard."""
+        full_path = self._get_selected_path()
+        if full_path:
+            filename = Path(full_path).name
+            self.root.clipboard_clear()
+            self.root.clipboard_append(filename)
+            self.status_var.set(f"Filename copied: {filename}")
+            self.status_bar_var.set("Filename copied to clipboard")
+    
+    def _search_in_directory(self, full_path: str):
+        """Set search to filter results within the selected item's directory."""
+        path = Path(full_path)
+        directory = path.parent if path.is_file() else path
+        self.search_input.delete(0, tk.END)
+        self.search_input.insert(0, str(directory))
+        self._do_search()
+        self.search_input.focus_set()
+    
     def _show_context_menu(self, event):
         """Show right-click context menu for search results."""
         # Select the row under the cursor
@@ -532,10 +572,13 @@ class MainWindow:
             self._context_menu.destroy()
         
         self._context_menu = tk.Menu(self.root, tearoff=0)
-        self._context_menu.add_command(label="Open File", command=lambda: self._open_file(full_path))
-        self._context_menu.add_command(label="Reveal in Explorer", command=lambda: self._reveal_in_explorer(full_path))
+        self._context_menu.add_command(label="Open File", command=lambda: self._open_file(full_path), accelerator="Ctrl+O")
+        self._context_menu.add_command(label="Reveal in Explorer", command=lambda: self._reveal_in_explorer(full_path), accelerator="Ctrl+R")
         self._context_menu.add_separator()
-        self._context_menu.add_command(label="Copy Path", command=self._copy_selected_path)
+        self._context_menu.add_command(label="Copy Path", command=self._copy_selected_path, accelerator="Ctrl+C")
+        self._context_menu.add_command(label="Copy Filename", command=self._copy_selected_filename)
+        self._context_menu.add_separator()
+        self._context_menu.add_command(label="Search in this directory", command=lambda: self._search_in_directory(full_path))
         
         self._context_menu.post(event.x_root, event.y_root)
     
@@ -628,6 +671,33 @@ class MainWindow:
         
         widget.bind("<Enter>", on_enter)
         widget.bind("<Leave>", on_leave)
+    
+    def _export_results(self):
+        """Export current search results to a text file."""
+        if not self._last_results:
+            messagebox.showinfo("Export", "No results to export.")
+            return
+        
+        from tkinter import filedialog
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Export Search Results"
+        )
+        if not file_path:
+            return
+        
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write("Name\tPath\tSize\tModified\tType\n")
+                for r in self._last_results:
+                    size_str = "-" if r.is_directory else self._format_size(r.size)
+                    modified_str = datetime.fromtimestamp(r.modified_time).strftime("%Y-%m-%d %H:%M")
+                    f.write(f"{r.name}\t{r.parent_dir}\t{size_str}\t{modified_str}\t{'Directory' if r.is_directory else 'File'}\n")
+            self.status_var.set(f"Exported {len(self._last_results)} results to {Path(file_path).name}")
+            self.status_bar_var.set(f"Exported to {Path(file_path).name}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export: {e}")
     
     def _show_about(self):
         """Show the About dialog."""
@@ -755,8 +825,35 @@ class MainWindow:
         self.search_history.clear()
         self._hide_history()  # Close popup after clearing
     
+    def _load_geometry(self):
+        """Load and apply saved window geometry."""
+        from ..config import CONFIG_DIR
+        geometry_file = CONFIG_DIR / "window_geometry.txt"
+        if geometry_file.exists():
+            try:
+                with open(geometry_file, 'r') as f:
+                    geometry = f.read().strip()
+                    if geometry:
+                        self.root.geometry(geometry)
+                        return
+            except Exception:
+                pass
+        self.root.geometry("900x600")
+    
+    def _save_geometry(self):
+        """Save current window geometry."""
+        from ..config import CONFIG_DIR
+        try:
+            geometry = self.root.geometry()
+            geometry_file = CONFIG_DIR / "window_geometry.txt"
+            with open(geometry_file, 'w') as f:
+                f.write(geometry)
+        except Exception:
+            pass
+    
     def close(self):
         """Clean up resources."""
+        self._save_geometry()
         self.bg_indexer.stop()
         self.indexer.close()
         self.size_analyzer.stop()
