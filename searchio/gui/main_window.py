@@ -74,6 +74,8 @@ class MainWindow:
         view_menu.add_checkbutton(label="Dark Mode", variable=self._dark_mode_var, command=self._toggle_dark_mode)
         view_menu.add_separator()
         view_menu.add_command(label="Settings...", command=self._show_settings)
+        view_menu.add_separator()
+        view_menu.add_command(label="Reload Index", command=self._reload_index)
         
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
@@ -171,7 +173,7 @@ class MainWindow:
         
         # Results treeview with icons
         columns = ("type", "name", "path", "size", "modified")
-        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="tree headings", selectmode="browse")
+        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="tree headings", selectmode="browse", height=15)
         
         # Configure column headings with sort commands
         self.results_tree.heading("type", text="")
@@ -187,10 +189,10 @@ class MainWindow:
         
         # Configure column widths
         self.results_tree.column("type", width=30, minwidth=30, stretch=False)
-        self.results_tree.column("name", width=200, minwidth=100)
-        self.results_tree.column("path", width=350, minwidth=200)
-        self.results_tree.column("size", width=80, minwidth=60)
-        self.results_tree.column("modified", width=140, minwidth=100)
+        self.results_tree.column("name", width=250, minwidth=120)
+        self.results_tree.column("path", width=400, minwidth=200)
+        self.results_tree.column("size", width=90, minwidth=70)
+        self.results_tree.column("modified", width=150, minwidth=110)
         
         # Configure tags for styling
         self.results_tree.tag_configure("directory", foreground="#006666", font=('Segoe UI', 9, 'bold'))
@@ -368,6 +370,12 @@ class MainWindow:
         # Cancel any pending search
         if self._search_after_id:
             self.root.after_cancel(self._search_after_id)
+        
+        # Don't search on special keys
+        if event.keysym in ('Up', 'Down', 'Left', 'Right', 'Shift_L', 'Shift_R', 
+                            'Control_L', 'Control_R', 'Alt_L', 'Alt_R', 'Caps_Lock',
+                            'Tab', 'Return', 'Escape', 'Home', 'End', 'Prior', 'Next'):
+            return
         
         # Schedule new search after debounce (default 200ms, configurable)
         debounce_ms = getattr(self, '_debounce_ms', 200)
@@ -696,6 +704,27 @@ class MainWindow:
         self.results_count_var.set(f"{len(filtered)} filtered")
         self.status_bar_var.set(f"Filtered by directory: {directory}")
     
+    def _add_to_favorites(self, full_path: str):
+        """Add a path to favorites for quick access."""
+        from ..config import CONFIG_DIR
+        favorites_file = CONFIG_DIR / "favorites.txt"
+        try:
+            favorites = []
+            if favorites_file.exists():
+                with open(favorites_file, 'r', encoding='utf-8') as f:
+                    favorites = [line.strip() for line in f if line.strip()]
+            if full_path not in favorites:
+                favorites.append(full_path)
+                with open(favorites_file, 'w', encoding='utf-8') as f:
+                    for fav in favorites[-20:]:
+                        f.write(f"{fav}\n")
+                self.status_var.set(f"Added to favorites: {Path(full_path).name}")
+                self.status_bar_var.set("Added to favorites")
+            else:
+                self.status_var.set("Already in favorites")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not add to favorites: {e}")
+    
     def _show_context_menu(self, event):
         """Show right-click context menu for search results."""
         # Select the row under the cursor
@@ -718,6 +747,7 @@ class MainWindow:
         self._context_menu.add_command(label="Copy Filename", command=self._copy_selected_filename)
         self._context_menu.add_separator()
         self._context_menu.add_command(label="Search in this directory", command=lambda: self._search_in_directory(full_path))
+        self._context_menu.add_command(label="Add to Favorites", command=lambda: self._add_to_favorites(full_path))
         
         self._context_menu.post(event.x_root, event.y_root)
     
@@ -888,6 +918,16 @@ class MainWindow:
         )
         messagebox.showinfo("Keyboard Shortcuts", shortcuts)
     
+    def _reload_index(self):
+        """Force a full re-index of all drives."""
+        if messagebox.askyesno("Reload Index", "This will clear and rebuild the search index. Continue?"):
+            self.indexer.clear_index()
+            self.bg_indexer.stop()
+            self.bg_indexer.start()
+            self.progress.start()
+            self.status_var.set("Rebuilding index...")
+            self.status_bar_var.set("Rebuilding index...")
+    
     def _show_settings(self):
         """Show settings dialog for user preferences."""
         settings_win = tk.Toplevel(self.root)
@@ -977,11 +1017,57 @@ class MainWindow:
         
         ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
         
+        ttk.Label(parent, text="Saved Favorites", font=('Segoe UI', 12, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        self._saved_favorites_list = tk.Listbox(parent, height=6, font=('Segoe UI', 10))
+        self._saved_favorites_list.pack(fill=tk.X, pady=(0, 5))
+        self._saved_favorites_list.bind("<Double-1>", lambda e: self._on_saved_favorite_select())
+        self._update_saved_favorites_list()
+        
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+        
         ttk.Label(parent, text="Recent Searches", font=('Segoe UI', 12, 'bold')).pack(anchor=tk.W, pady=(0, 10))
-        self._favorites_list = tk.Listbox(parent, height=10, font=('Segoe UI', 10))
+        self._favorites_list = tk.Listbox(parent, height=8, font=('Segoe UI', 10))
         self._favorites_list.pack(fill=tk.BOTH, expand=True)
         self._favorites_list.bind("<Double-1>", lambda e: self._on_favorite_select())
         self._update_favorites_list()
+    
+    def _update_saved_favorites_list(self):
+        """Update the saved favorites list from file."""
+        if hasattr(self, '_saved_favorites_list'):
+            self._saved_favorites_list.delete(0, tk.END)
+            from ..config import CONFIG_DIR
+            favorites_file = CONFIG_DIR / "favorites.txt"
+            if favorites_file.exists():
+                try:
+                    with open(favorites_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            path = line.strip()
+                            if path:
+                                self._saved_favorites_list.insert(tk.END, f"📁 {Path(path).name}")
+                except Exception:
+                    pass
+            if self._saved_favorites_list.size() == 0:
+                self._saved_favorites_list.insert(tk.END, "No saved favorites")
+    
+    def _on_saved_favorite_select(self):
+        """Handle selection from saved favorites list."""
+        selection = self._saved_favorites_list.curselection()
+        if not selection:
+            return
+        text = self._saved_favorites_list.get(selection[0])
+        if text == "No saved favorites":
+            return
+        from ..config import CONFIG_DIR
+        favorites_file = CONFIG_DIR / "favorites.txt"
+        try:
+            with open(favorites_file, 'r', encoding='utf-8') as f:
+                paths = [line.strip() for line in f if line.strip()]
+            idx = selection[0]
+            if 0 <= idx < len(paths):
+                self.notebook.select(0)
+                self._reveal_in_explorer(paths[idx])
+        except Exception:
+            pass
     
     def _update_favorites_list(self):
         """Update the favorites list with recent searches."""
