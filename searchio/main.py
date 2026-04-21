@@ -5,8 +5,8 @@ import logging
 import sys
 from pathlib import Path
 
-from config import CONFIG_DIR
-from gui.main_window import MainWindow
+from .config import CONFIG_DIR
+from .gui.main_window import MainWindow
 
 
 def setup_logging():

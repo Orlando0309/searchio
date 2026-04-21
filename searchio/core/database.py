@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from contextlib import contextmanager
 
-from config import INDEX_DB_PATH
+from ..config import INDEX_DB_PATH
 
 logger = logging.getLogger(__name__)
 

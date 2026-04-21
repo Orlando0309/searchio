@@ -7,14 +7,16 @@ from pathlib import Path
 import subprocess
 import platform
 import re
+import os
+from typing import Optional
 
-from core.indexer import FileIndexer
-from core.background_indexer import BackgroundIndexer
-from core.size_analyzer import SizeAnalyzer, SizeNode, get_drives_for_analysis, format_size
-from core.search_history import SearchHistory
-from gui.treemap_widget import TreemapPanel
-from gui.memory_graph_widget import MemoryGraphPanel
-from config import APP_NAME, APP_VERSION  # Root level config import
+from ..core.indexer import FileIndexer
+from ..core.background_indexer import BackgroundIndexer
+from ..core.size_analyzer import SizeAnalyzer, SizeNode, get_drives_for_analysis, format_size
+from ..core.search_history import SearchHistory
+from .treemap_widget import TreemapPanel
+from .memory_graph_widget import MemoryGraphPanel
+from ..config import APP_NAME, APP_VERSION
 
 
 class MainWindow:
@@ -51,6 +53,24 @@ class MainWindow:
         style.configure("File.Treeview", foreground="#333333")
     
     def _setup_ui(self):
+        # Menu bar
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+        
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Exit", command=self.root.quit, accelerator="Alt+F4")
+        
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="View", menu=view_menu)
+        view_menu.add_command(label="Clear Search", command=self._clear_search, accelerator="Esc")
+        view_menu.add_separator()
+        view_menu.add_command(label="Focus Search", command=self.search_input.focus_set, accelerator="Ctrl+K")
+        
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="About", command=self._show_about)
+        
         # Main frame
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -85,6 +105,9 @@ class MainWindow:
         self.stats_var = tk.StringVar(value="0 files indexed")
         ttk.Label(stats_frame, textvariable=self.stats_var, foreground="gray").pack(side=tk.LEFT)
         
+        self.results_count_var = tk.StringVar(value="")
+        ttk.Label(stats_frame, textvariable=self.results_count_var, foreground="gray").pack(side=tk.RIGHT)
+        
         # Search frame - live search on typing
         search_input_frame = ttk.Frame(search_frame)
         search_input_frame.pack(fill=tk.X, pady=(0, 5))
@@ -96,6 +119,17 @@ class MainWindow:
         # History button
         self.history_btn = ttk.Button(search_input_frame, text="🕐", width=3, command=self._show_history)
         self.history_btn.pack(side=tk.LEFT, padx=(5, 0))
+        self._add_tooltip(self.history_btn, "Search history (click or focus search)")
+        
+        # Explicit search button
+        self.search_btn = ttk.Button(search_input_frame, text="🔍", width=3, command=self._do_search)
+        self.search_btn.pack(side=tk.LEFT, padx=(5, 0))
+        self._add_tooltip(self.search_btn, "Run search now")
+        
+        # Clear button
+        self.clear_btn = ttk.Button(search_input_frame, text="✕", width=3, command=self._clear_search)
+        self.clear_btn.pack(side=tk.LEFT, padx=(5, 0))
+        self._add_tooltip(self.clear_btn, "Clear search and results (Esc)")
         
         # Content search toggle
         self.content_search_cb = ttk.Checkbutton(search_input_frame, text="Content", variable=self._content_search_var)
@@ -105,16 +139,25 @@ class MainWindow:
         hint_label = ttk.Label(search_input_frame, text="(use *.ext for glob, or /regex/ for regex)", foreground="gray")
         hint_label.pack(side=tk.LEFT, padx=(10, 0))
         
+        # Results frame to hold treeview and scrollbar together
+        results_frame = ttk.Frame(search_frame)
+        results_frame.pack(fill=tk.BOTH, expand=True)
+        
         # Results treeview with icons
         columns = ("type", "name", "path", "size", "modified")
-        self.results_tree = ttk.Treeview(search_frame, columns=columns, show="tree headings", selectmode="browse")
+        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="tree headings", selectmode="browse")
         
-        # Configure column headings
+        # Configure column headings with sort commands
         self.results_tree.heading("type", text="")
-        self.results_tree.heading("name", text="Name")
-        self.results_tree.heading("path", text="Path")
-        self.results_tree.heading("size", text="Size")
-        self.results_tree.heading("modified", text="Modified")
+        self.results_tree.heading("name", text="Name", command=lambda: self._sort_results("name"))
+        self.results_tree.heading("path", text="Path", command=lambda: self._sort_results("path"))
+        self.results_tree.heading("size", text="Size", command=lambda: self._sort_results("size"))
+        self.results_tree.heading("modified", text="Modified", command=lambda: self._sort_results("modified"))
+        
+        # Sort state
+        self._sort_column = None
+        self._sort_reverse = False
+        self._last_results = []
         
         # Configure column widths
         self.results_tree.column("type", width=30, minwidth=30, stretch=False)
@@ -126,9 +169,11 @@ class MainWindow:
         # Configure tags for styling
         self.results_tree.tag_configure("directory", foreground="#008080", font=('Segoe UI', 9, 'bold'))
         self.results_tree.tag_configure("file", foreground="#333333")
+        self.results_tree.tag_configure("evenrow", background="#f5f5f5")
+        self.results_tree.tag_configure("oddrow", background="#ffffff")
         
         # Scrollbar
-        scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
+        scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
         self.results_tree.configure(yscrollcommand=scrollbar.set)
         
         self.results_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -136,9 +181,29 @@ class MainWindow:
         
         # Bind double-click to open file location
         self.results_tree.bind("<Double-1>", self._on_double_click)
+        # Bind right-click for context menu
+        self.results_tree.bind("<Button-3>", self._show_context_menu)
         
         # Store full paths for items (for reveal functionality)
         self._item_paths = {}
+        self._context_menu = None
+        
+        # Empty state label (shown when no results)
+        self.empty_state_var = tk.StringVar(value="Type to search across indexed files")
+        self.empty_state_label = ttk.Label(search_frame, textvariable=self.empty_state_var, 
+                                           font=('Segoe UI', 11), foreground="gray", justify=tk.CENTER)
+        self.empty_state_label.pack(pady=40)
+        
+        # Status bar at bottom of search tab
+        status_bar = ttk.Frame(search_frame, relief=tk.SUNKEN, padding="2")
+        status_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(5, 0))
+        
+        self.status_bar_var = tk.StringVar(value="Ready")
+        ttk.Label(status_bar, textvariable=self.status_bar_var, font=('Segoe UI', 8), foreground="gray").pack(side=tk.LEFT)
+        
+        self.shortcuts_hint = ttk.Label(status_bar, text="Ctrl+K: Search | Esc: Clear | Ctrl+C: Copy Path | ▲▼: Navigate", 
+                                        font=('Segoe UI', 8), foreground="gray")
+        self.shortcuts_hint.pack(side=tk.RIGHT)
         
         # Memory/Disk Usage tab
         usage_frame = ttk.Frame(self.notebook, padding="10")
@@ -174,7 +239,16 @@ class MainWindow:
         
         # Show history on focus
         self.search_input.bind("<FocusIn>", lambda e: self._show_history())
-        # Remove FocusOut - use click-outside detection instead
+        
+        # Global keyboard shortcuts
+        self.root.bind("<Control-k>", lambda e: self.search_input.focus_set())
+        self.root.bind("<Escape>", self._on_escape)
+        self.results_tree.bind("<Control-c>", lambda e: self._copy_selected_path())
+        self.results_tree.bind("<Return>", lambda e: self._on_double_click(None))
+        
+        # Keyboard navigation: Down arrow from search input moves to results
+        self.search_input.bind("<Down>", lambda e: self._focus_first_result())
+        self.results_tree.bind("<Up>", self._on_tree_up_arrow)
         
         # Bind click on main window to close history popup
         self.root.bind("<Button-1>", self._on_root_click)
@@ -206,6 +280,7 @@ class MainWindow:
     def _on_status_update(self, message: str):
         """Handle status updates from background indexer."""
         self.root.after(0, lambda: self.status_var.set(message))
+        self.root.after(0, lambda: self.status_bar_var.set(message))
     
     def _on_progress_update(self, count: int, current_path: str):
         """Handle progress updates from background indexer."""
@@ -241,7 +316,7 @@ class MainWindow:
         
         query = self.search_input.get().strip()
         if not query:
-            self._clear_results()
+            self._clear_search()
             return
         
         # Determine search type
@@ -258,6 +333,8 @@ class MainWindow:
         
         self._display_results(results, query)
         self.status_var.set(f"Found {len(results)} results")
+        self.results_count_var.set(f"{len(results)} results")
+        self.status_bar_var.set(f"Search complete — {len(results)} results")
         
         # Save to history
         search_type = 'content' if self._content_search_var.get() else 'regex' if self._is_regex_pattern(query) else 'glob' if self.indexer._is_glob_pattern(query) else 'name'
@@ -268,6 +345,13 @@ class MainWindow:
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
         self._item_paths.clear()
+        self.results_count_var.set("")
+        self._last_results = []
+        self._sort_column = None
+        self._sort_reverse = False
+        # Reset headings
+        for col, text in (("name", "Name"), ("path", "Path"), ("size", "Size"), ("modified", "Modified")):
+            self.results_tree.heading(col, text=text)
     
     def _get_file_icon(self, is_directory: bool, extension: str = "") -> str:
         """Get icon character for file type."""
@@ -287,11 +371,55 @@ class MainWindow:
         
         return icon_map.get(extension.lower(), '📄')
     
+    def _sort_results(self, column: str):
+        """Sort results by the given column."""
+        if not self._last_results:
+            return
+        
+        if self._sort_column == column:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_column = column
+            self._sort_reverse = False
+        
+        def sort_key(file_info):
+            if column == "name":
+                return file_info.name.lower()
+            elif column == "path":
+                return file_info.parent_dir.lower()
+            elif column == "size":
+                return file_info.size
+            elif column == "modified":
+                return file_info.modified_time
+            return file_info.name.lower()
+        
+        self._last_results.sort(key=sort_key, reverse=self._sort_reverse)
+        self._display_results(self._last_results, None)
+        
+        # Update heading indicators
+        for col in ("name", "path", "size", "modified"):
+            text = {"name": "Name", "path": "Path", "size": "Size", "modified": "Modified"}[col]
+            if col == self._sort_column:
+                text += " ▼" if self._sort_reverse else " ▲"
+            self.results_tree.heading(col, text=text)
+    
     def _display_results(self, results, query: str):
         """Display search results in the tree with icons."""
+        if query is not None:
+            self._last_results = list(results)
+        else:
+            results = self._last_results
+        
         self._clear_results()
         
-        for file_info in results:
+        if not results and query is not None:
+            self.empty_state_var.set(f'No results found for "{query}"')
+            self.empty_state_label.pack(pady=40)
+            return
+        else:
+            self.empty_state_label.pack_forget()
+        
+        for i, file_info in enumerate(results):
             icon = self._get_file_icon(file_info.is_directory, file_info.extension)
             
             if file_info.is_directory:
@@ -303,13 +431,14 @@ class MainWindow:
             
             tag = "directory" if file_info.is_directory else "file"
             
+            row_tag = "evenrow" if i % 2 == 0 else "oddrow"
             item_id = self.results_tree.insert("", tk.END, values=(
                 icon,
                 file_info.name,
                 file_info.parent_dir,
                 size_str,
                 modified_str
-            ), tags=(tag,))
+            ), tags=(tag, row_tag))
             
             self._item_paths[item_id] = file_info.path
     
@@ -320,20 +449,42 @@ class MainWindow:
             size /= 1024
         return f"{size:.1f} TB"
     
-    def _on_double_click(self, event):
-        """Open file location when double-clicking a result."""
+    def _focus_first_result(self):
+        """Move focus to the first result in the tree."""
+        children = self.results_tree.get_children()
+        if children:
+            self.results_tree.focus_set()
+            self.results_tree.selection_set(children[0])
+            self.results_tree.focus(children[0])
+        return "break"
+    
+    def _on_tree_up_arrow(self, event):
+        """Move focus back to search input when pressing Up at the top of the tree."""
+        selection = self.results_tree.selection()
+        if selection:
+            index = self.results_tree.index(selection[0])
+            if index == 0:
+                self.search_input.focus_set()
+                return "break"
+        return None
+    
+    def _get_selected_path(self) -> Optional[str]:
+        """Get the full path of the currently selected result."""
         selection = self.results_tree.selection()
         if not selection:
-            return
-        
-        item_id = selection[0]
-        full_path = self._item_paths.get(item_id)
-        
+            return None
+        return self._item_paths.get(selection[0])
+    
+    def _on_double_click(self, event):
+        """Open file location when double-clicking a result."""
+        full_path = self._get_selected_path()
         if not full_path:
             return
-        
+        self._reveal_in_explorer(full_path)
+    
+    def _reveal_in_explorer(self, full_path: str):
+        """Reveal the given path in the system file manager."""
         path = Path(full_path)
-        
         try:
             if platform.system() == 'Windows':
                 subprocess.run(['explorer', '/select,', str(path)], check=False)
@@ -343,6 +494,50 @@ class MainWindow:
                 subprocess.run(['xdg-open', str(path.parent)], check=False)
         except Exception as e:
             messagebox.showerror("Error", f"Could not open file location: {e}")
+    
+    def _open_file(self, full_path: str):
+        """Open the given file with the default application."""
+        path = Path(full_path)
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(str(path))
+            elif platform.system() == 'Darwin':
+                subprocess.run(['open', str(path)], check=False)
+            else:
+                subprocess.run(['xdg-open', str(path)], check=False)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open file: {e}")
+    
+    def _copy_selected_path(self):
+        """Copy the selected result's path to the clipboard."""
+        full_path = self._get_selected_path()
+        if full_path:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(full_path)
+            self.status_var.set("Path copied to clipboard")
+            self.status_bar_var.set("Path copied to clipboard")
+    
+    def _show_context_menu(self, event):
+        """Show right-click context menu for search results."""
+        # Select the row under the cursor
+        row_id = self.results_tree.identify_row(event.y)
+        if row_id:
+            self.results_tree.selection_set(row_id)
+        
+        full_path = self._get_selected_path()
+        if not full_path:
+            return
+        
+        if self._context_menu:
+            self._context_menu.destroy()
+        
+        self._context_menu = tk.Menu(self.root, tearoff=0)
+        self._context_menu.add_command(label="Open File", command=lambda: self._open_file(full_path))
+        self._context_menu.add_command(label="Reveal in Explorer", command=lambda: self._reveal_in_explorer(full_path))
+        self._context_menu.add_separator()
+        self._context_menu.add_command(label="Copy Path", command=self._copy_selected_path)
+        
+        self._context_menu.post(event.x_root, event.y_root)
     
     def _populate_drive_combo(self):
         """Populate the drive combo box with available drives."""
@@ -409,6 +604,41 @@ class MainWindow:
         if self.memory_graph_panel:
             self.memory_graph_panel.load_drive(root_node.path, root_node)
     
+    def _add_tooltip(self, widget, text: str):
+        """Add a simple tooltip to a widget."""
+        tooltip = None
+        
+        def on_enter(event):
+            nonlocal tooltip
+            x = widget.winfo_rootx() + 20
+            y = widget.winfo_rooty() + widget.winfo_height() + 5
+            tooltip = tk.Toplevel(widget)
+            tooltip.overrideredirect(True)
+            tooltip.geometry(f"+{x}+{y}")
+            tooltip.attributes('-topmost', True)
+            label = ttk.Label(tooltip, text=text, background="#ffffe0", foreground="#333333",
+                              relief=tk.SOLID, borderwidth=1, padding=(4, 2), font=('Segoe UI', 8))
+            label.pack()
+        
+        def on_leave(event):
+            nonlocal tooltip
+            if tooltip:
+                tooltip.destroy()
+                tooltip = None
+        
+        widget.bind("<Enter>", on_enter)
+        widget.bind("<Leave>", on_leave)
+    
+    def _show_about(self):
+        """Show the About dialog."""
+        messagebox.showinfo(
+            "About",
+            f"{APP_NAME} v{APP_VERSION}\n\n"
+            "A fast desktop file search application.\n"
+            "Features: instant search, content search, regex/glob patterns,\n"
+            "disk usage visualization with treemap and file tree."
+        )
+    
     def run(self):
         """Start the main event loop."""
         self.root.mainloop()
@@ -431,19 +661,33 @@ class MainWindow:
         
         # Bind click on popup to mark it as active (prevent closing)
         self._history_popup.bind("<Button-1>", lambda e: self._popup_clicked())
+        self._history_popup.bind("<Escape>", lambda e: self._hide_history())
         
         # Create history list
         history_frame = ttk.Frame(self._history_popup, relief="solid", borderwidth=1)
         history_frame.pack(fill=tk.BOTH, expand=True)
         
+        from datetime import datetime
         entries = self.search_history.get_recent(10)
         if not entries:
             ttk.Label(history_frame, text="No recent searches", foreground="gray").pack(padx=10, pady=10)
         else:
+            type_icons = {'name': '🔍', 'content': '📝', 'regex': '🔤', 'glob': '🌐'}
             for entry in entries:
+                icon = type_icons.get(entry.search_type, '🔍')
+                # Relative time
+                age = datetime.now().timestamp() - entry.timestamp
+                if age < 60:
+                    time_str = "just now"
+                elif age < 3600:
+                    time_str = f"{int(age/60)}m ago"
+                elif age < 86400:
+                    time_str = f"{int(age/3600)}h ago"
+                else:
+                    time_str = f"{int(age/86400)}d ago"
                 btn = ttk.Button(
                     history_frame,
-                    text=f"{entry.query} ({entry.result_count} results)",
+                    text=f"{icon} {entry.query}  ({entry.result_count} results)  ·  {time_str}",
                     command=lambda q=entry.query: self._select_history_item(q),
                     width=50
                 )
@@ -464,6 +708,26 @@ class MainWindow:
         self._popup_active = True
         self.root.after(200, lambda: setattr(self, '_popup_active', False))
     
+    def _clear_search(self):
+        """Clear search input and results."""
+        self.search_input.delete(0, tk.END)
+        self._clear_results()
+        self.status_var.set("Ready")
+        self.status_bar_var.set("Ready")
+        self.empty_state_var.set("Type to search across indexed files")
+        self.empty_state_label.pack(pady=40)
+        self.search_input.focus_set()
+    
+    def _on_escape(self, event=None):
+        """Handle Escape key: close history popup or clear search results."""
+        if self._history_popup and self._history_popup.winfo_exists():
+            self._hide_history()
+            return "break"
+        if self.search_input.get().strip():
+            self._clear_search()
+            return "break"
+        return None
+
     def _on_root_click(self, event):
         """Handle clicks on main window - close history popup if clicking outside."""
         if self._history_popup and self._history_popup.winfo_exists():

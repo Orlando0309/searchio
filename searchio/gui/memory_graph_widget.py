@@ -4,7 +4,7 @@ from tkinter import ttk
 from typing import List, Optional, Dict
 from dataclasses import dataclass
 
-from core.size_analyzer import SizeNode, format_size
+from ..core.size_analyzer import SizeNode, format_size
 
 
 @dataclass
@@ -231,8 +231,15 @@ class MemoryGraphPanel(ttk.Frame):
         self.path_label = ttk.Label(toolbar, textvariable=self.path_var, font=('Segoe UI', 10))
         self.path_label.pack(side=tk.LEFT, padx=10)
         
+        # Search filter for memory graph
+        self.filter_var = tk.StringVar()
+        self.filter_entry = ttk.Entry(toolbar, textvariable=self.filter_var, width=20)
+        self.filter_entry.pack(side=tk.RIGHT, padx=(5, 5))
+        self.filter_entry.bind("<KeyRelease>", self._on_filter)
+        ttk.Label(toolbar, text="Filter:", font=('Segoe UI', 9)).pack(side=tk.RIGHT)
+        
         self.refresh_btn = ttk.Button(toolbar, text='⟳', command=self._refresh, width=3)
-        self.refresh_btn.pack(side=tk.RIGHT)
+        self.refresh_btn.pack(side=tk.RIGHT, padx=(5, 0))
         
         # Memory graph widget
         self.graph = MemoryGraphWidget(self)
@@ -260,6 +267,28 @@ class MemoryGraphPanel(ttk.Frame):
             prev_node = self._nav_stack[-1]
             self.graph.load_node(prev_node)
             self._update_nav()
+    
+    def _on_filter(self, event=None):
+        """Filter the tree view based on the filter text."""
+        query = self.filter_var.get().lower()
+        if not query:
+            # Show all
+            for item in self.graph.tree.get_children():
+                self.graph.tree.item(item, open=False)
+            return
+        
+        # Expand and show matching items
+        for item_id, node in self.graph._node_map.items():
+            if query in node.name.lower():
+                # Ensure parents are visible
+                parent = self.graph.tree.parent(item_id)
+                while parent:
+                    self.graph.tree.item(parent, open=True)
+                    parent = self.graph.tree.parent(parent)
+                # Select the match
+                self.graph.tree.selection_set(item_id)
+                self.graph.tree.see(item_id)
+                break
     
     def _refresh(self):
         """Refresh the current view."""

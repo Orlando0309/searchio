@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 from dataclasses import dataclass, asdict
 
-from config import CONFIG_DIR
+from ..config import CONFIG_DIR
 
 logger = logging.getLogger(__name__)
 

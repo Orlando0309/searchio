@@ -4,7 +4,7 @@ from tkinter import ttk
 from typing import List, Optional, Dict, Tuple
 from dataclasses import dataclass
 
-from core.size_analyzer import SizeNode, format_size
+from ..core.size_analyzer import SizeNode, format_size
 
 
 @dataclass
@@ -414,6 +414,14 @@ class TreemapPanel(ttk.Frame):
         self.path_var = tk.StringVar(value='Select a drive...')
         self.path_label = ttk.Label(nav_frame, textvariable=self.path_var)
         self.path_label.pack(side=tk.LEFT, padx=10)
+        
+        # Zoom controls
+        zoom_frame = ttk.Frame(nav_frame)
+        zoom_frame.pack(side=tk.RIGHT)
+        
+        ttk.Button(zoom_frame, text='−', width=3, command=self.treemap.zoom_out).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(zoom_frame, text='Reset', width=6, command=self.treemap.reset_view).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(zoom_frame, text='+', width=3, command=self.treemap.zoom_in).pack(side=tk.LEFT)
         
         self.treemap = TreemapWidget(self, width=800, height=400)
         self.treemap.pack(fill=tk.BOTH, expand=True)

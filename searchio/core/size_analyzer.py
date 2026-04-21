@@ -6,7 +6,7 @@ from typing import List, Optional, Callable
 from threading import Thread
 import platform
 
-from config import IGNORED_DIRECTORIES, IGNORED_EXTENSIONS
+from ..config import IGNORED_DIRECTORIES, IGNORED_EXTENSIONS
 
 
 @dataclass
