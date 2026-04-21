@@ -153,6 +153,13 @@ class MainWindow:
         self.content_search_cb = ttk.Checkbutton(search_input_frame, text="Content", variable=self._content_search_var)
         self.content_search_cb.pack(side=tk.LEFT, padx=(10, 0))
         
+        # Case sensitive toggle
+        self._case_sensitive_var = tk.BooleanVar(value=False)
+        self.case_cb = ttk.Checkbutton(search_input_frame, text="Aa", variable=self._case_sensitive_var,
+                                        command=self._do_search)
+        self.case_cb.pack(side=tk.LEFT, padx=(5, 0))
+        self._add_tooltip(self.case_cb, "Case sensitive search")
+        
         # File type filter
         self.file_type_var = tk.StringVar(value="All")
         self.file_type_combo = ttk.Combobox(search_input_frame, textvariable=self.file_type_var,
@@ -223,7 +230,7 @@ class MainWindow:
         # Bind right-click for context menu
         self.results_tree.bind("<Button-3>", self._show_context_menu)
         # Bind selection change to update preview
-        self.results_tree.bind("<<TreeviewSelect>>", lambda e: self._load_preview())
+        self.results_tree.bind("<<TreeviewSelect>>", lambda e: (self._load_preview(), self._update_details()))
         
         # Store full paths for items (for reveal functionality)
         self._item_paths = {}
@@ -264,6 +271,14 @@ class MainWindow:
                                      command=self._toggle_preview)
         self.preview_btn.pack(side=tk.LEFT, padx=(5, 0))
         self._add_tooltip(self.preview_btn, "Toggle preview pane")
+        
+        # Details panel (collapsible, below results)
+        self.details_frame = ttk.LabelFrame(search_frame, text="Details", padding="5")
+        self.details_var = tk.StringVar(value="Select an item to see details")
+        self.details_label = ttk.Label(self.details_frame, textvariable=self.details_var,
+                                        font=('Segoe UI', 9), foreground="#555555", justify=tk.LEFT)
+        self.details_label.pack(anchor=tk.W)
+        self.details_frame.pack(fill=tk.X, pady=(5, 0))
         
         # Status bar at bottom of search tab
         status_bar = ttk.Frame(search_frame, relief=tk.SUNKEN, padding="2")
@@ -443,6 +458,10 @@ class MainWindow:
             results = self.indexer.search(query)
         else:
             results = self.indexer.search(query)
+        
+        # Apply case sensitivity filter (post-filter for name searches)
+        if self._case_sensitive_var.get() and not self._is_regex_pattern(query):
+            results = [r for r in results if query in r.name]
         
         # Apply path scope filter
         scope = self.scope_var.get()
@@ -644,6 +663,29 @@ class MainWindow:
             self.preview_visible.set(True)
             # Load preview for current selection
             self._load_preview()
+    
+    def _update_details(self):
+        """Update the details panel with info about the selected item."""
+        full_path = self._get_selected_path()
+        if not full_path:
+            self.details_var.set("Select an item to see details")
+            return
+        
+        path = Path(full_path)
+        try:
+            stat = path.stat()
+            size = self._format_size(stat.st_size) if not path.is_dir() else "-"
+            modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            created = datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+            self.details_var.set(
+                f"Name: {path.name}\n"
+                f"Path: {path.parent}\n"
+                f"Size: {size}\n"
+                f"Modified: {modified}\n"
+                f"Created: {created}"
+            )
+        except Exception as e:
+            self.details_var.set(f"Cannot read details: {e}")
     
     def _load_preview(self):
         """Load preview for the selected file."""
