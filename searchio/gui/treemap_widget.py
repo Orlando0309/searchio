@@ -309,22 +309,39 @@ class TreemapWidget(tk.Canvas):
     
     def _show_tooltip(self, rect: TreemapRect, x: int, y: int):
         self._hide_tooltip()
-        tooltip_text = f"{rect.node.name}\nSize: {format_size(rect.node.size)}\n"
-        if rect.node.is_directory:
-            tooltip_text += f"Files: {rect.node.file_count}\nDirs: {rect.node.dir_count}\n"
-        tooltip_text += f"Path: {rect.node.path}"
+        node = rect.node
+        tooltip_text = f"{node.name}\n"
+        tooltip_text += f"Size: {format_size(node.size)}"
+        if node.parent and node.parent.size > 0:
+            percent = (node.size / node.parent.size) * 100
+            tooltip_text += f"  ({percent:.1f}% of parent)"
+        tooltip_text += "\n"
+        if node.is_directory:
+            tooltip_text += f"Files: {node.file_count:,}  |  Dirs: {node.dir_count:,}\n"
+        tooltip_text += f"Path: {node.path}"
         
         self._tooltip = tk.Toplevel(self)
-        self._tooltip.configure(bg=self._HIGHLIGHT_COLOR, fg='white')
+        self._tooltip.configure(bg=self._HIGHLIGHT_COLOR)
         self._tooltip.overrideredirect(True)
+        self._tooltip.attributes('-topmost', True)
         
         label = tk.Label(self._tooltip, text=tooltip_text, bg=self._HIGHLIGHT_COLOR,
-                        fg='white', justify='left', padx=8, pady=4, font=('Segoe UI', 9))
+                        fg='#eaeaea', justify='left', padx=10, pady=6, 
+                        font=('Segoe UI', 9), relief=tk.SOLID, borderwidth=1)
         label.pack()
         
         self.update_idletasks()
-        tooltip_x = self.winfo_rootx() + x + 10
-        tooltip_y = self.winfo_rooty() + y + 10
+        tooltip_x = self.winfo_rootx() + x + 15
+        tooltip_y = self.winfo_rooty() + y + 15
+        # Keep tooltip on screen
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        tw = self._tooltip.winfo_reqwidth()
+        th = self._tooltip.winfo_reqheight()
+        if tooltip_x + tw > screen_w:
+            tooltip_x = screen_w - tw - 10
+        if tooltip_y + th > screen_h:
+            tooltip_y = screen_h - th - 10
         self._tooltip.geometry(f'+{tooltip_x}+{tooltip_y}')
     
     def _hide_tooltip(self):

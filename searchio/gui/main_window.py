@@ -69,6 +69,9 @@ class MainWindow:
         view_menu.add_separator()
         view_menu.add_command(label="Focus Search", command=self.search_input.focus_set, accelerator="Ctrl+K")
         view_menu.add_command(label="Copy Path", command=self._copy_selected_path, accelerator="Ctrl+C")
+        view_menu.add_separator()
+        self._dark_mode_var = tk.BooleanVar(value=False)
+        view_menu.add_checkbutton(label="Dark Mode", variable=self._dark_mode_var, command=self._toggle_dark_mode)
         
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
@@ -822,6 +825,22 @@ class MainWindow:
             "  Scroll     Zoom in/out"
         )
         messagebox.showinfo("Keyboard Shortcuts", shortcuts)
+    
+    def _toggle_dark_mode(self):
+        """Toggle dark mode for the search tab."""
+        if self._dark_mode_var.get():
+            self.root.configure(bg='#1a1a2e')
+            # Update treeview style for dark mode
+            style = ttk.Style()
+            style.configure('Custom.Treeview', background='#16213e', foreground='#eaeaea', fieldbackground='#16213e')
+            style.configure('Custom.Treeview.Heading', background='#0f3460', foreground='#eaeaea')
+            self.results_tree.configure(style='Custom.Treeview')
+        else:
+            self.root.configure(bg='')
+            style = ttk.Style()
+            style.configure('Custom.Treeview', background='', foreground='', fieldbackground='')
+            style.configure('Custom.Treeview.Heading', background='', foreground='')
+            self.results_tree.configure(style='')
     
     def _show_about(self):
         """Show the About dialog."""
