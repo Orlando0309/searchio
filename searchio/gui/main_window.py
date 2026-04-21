@@ -197,6 +197,7 @@ class MainWindow:
         self.results_tree.tag_configure("evenrow", background="#f8f9fa")
         self.results_tree.tag_configure("oddrow", background="#ffffff")
         self.results_tree.tag_configure("selected", background="#cce5ff")
+        self.results_tree.tag_configure("match", foreground="#d9534f", font=('Segoe UI', 9, 'bold'))
         
         # Scrollbar
         scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
@@ -255,6 +256,11 @@ class MainWindow:
         # Memory/Disk Usage tab
         usage_frame = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(usage_frame, text="Memory/Disk Usage")
+        
+        # Favorites / Quick Access tab
+        favorites_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(favorites_frame, text="Favorites")
+        self._setup_favorites_tab(favorites_frame)
         
         # Drive selection
         drive_frame = ttk.LabelFrame(usage_frame, text="Select Drive", padding="5")
@@ -374,6 +380,7 @@ class MainWindow:
         self._search_after_id = None
         
         query = self.search_input.get().strip()
+        self._last_query = query
         if not query:
             self._clear_search()
             return
@@ -406,6 +413,9 @@ class MainWindow:
         # Save to history
         search_type = 'content' if self._content_search_var.get() else 'regex' if self._is_regex_pattern(query) else 'glob' if self.indexer._is_glob_pattern(query) else 'name'
         self.search_history.add_entry(query, len(results), search_type)
+        
+        # Update favorites list
+        self._update_favorites_list()
     
     def _clear_results(self):
         """Clear all results from the tree."""
@@ -470,12 +480,27 @@ class MainWindow:
                 text += " ▼" if self._sort_reverse else " ▲"
             self.results_tree.heading(col, text=text)
     
+    def _highlight_match(self, text: str, query: str) -> str:
+        """Highlight the query match in text for display."""
+        if not query or len(query) < 2:
+            return text
+        # Simple case-insensitive highlight
+        lower_text = text.lower()
+        lower_query = query.lower()
+        if lower_query in lower_text:
+            start = lower_text.index(lower_query)
+            end = start + len(query)
+            return text[:start] + text[start:end] + text[end:]
+        return text
+    
     def _display_results(self, results, query: str):
         """Display search results in the tree with icons."""
         if query is not None:
             self._last_results = list(results)
+            self._last_query = query
         else:
             results = self._last_results
+            query = getattr(self, '_last_query', '')
         
         self._clear_results()
         
@@ -895,6 +920,59 @@ class MainWindow:
             style.configure('Custom.Treeview', background='', foreground='', fieldbackground='')
             style.configure('Custom.Treeview.Heading', background='', foreground='')
             self.results_tree.configure(style='')
+    
+    def _setup_favorites_tab(self, parent):
+        """Setup the favorites/quick access tab."""
+        ttk.Label(parent, text="Quick Access Locations", font=('Segoe UI', 12, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        
+        # Common locations
+        common_paths = [
+            ("Desktop", Path.home() / "Desktop"),
+            ("Documents", Path.home() / "Documents"),
+            ("Downloads", Path.home() / "Downloads"),
+            ("Home", Path.home()),
+            ("Project Root", Path.cwd()),
+        ]
+        
+        for name, path in common_paths:
+            if path.exists():
+                btn = ttk.Button(parent, text=f"📁 {name}", 
+                                command=lambda p=str(path): self._search_path(p),
+                                width=30)
+                btn.pack(anchor=tk.W, pady=2)
+        
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+        
+        ttk.Label(parent, text="Recent Searches", font=('Segoe UI', 12, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        self._favorites_list = tk.Listbox(parent, height=10, font=('Segoe UI', 10))
+        self._favorites_list.pack(fill=tk.BOTH, expand=True)
+        self._favorites_list.bind("<Double-1>", lambda e: self._on_favorite_select())
+        self._update_favorites_list()
+    
+    def _update_favorites_list(self):
+        """Update the favorites list with recent searches."""
+        if hasattr(self, '_favorites_list'):
+            self._favorites_list.delete(0, tk.END)
+            for entry in self.search_history.get_recent(20):
+                self._favorites_list.insert(tk.END, f"{entry.query} ({entry.result_count} results)")
+    
+    def _on_favorite_select(self):
+        """Handle selection from favorites list."""
+        selection = self._favorites_list.curselection()
+        if selection:
+            text = self._favorites_list.get(selection[0])
+            query = text.split(" (")[0]
+            self.notebook.select(0)  # Switch to search tab
+            self.search_input.delete(0, tk.END)
+            self.search_input.insert(0, query)
+            self._do_search()
+    
+    def _search_path(self, path: str):
+        """Search for items in a specific path."""
+        self.notebook.select(0)  # Switch to search tab
+        self.search_input.delete(0, tk.END)
+        self.search_input.insert(0, path)
+        self._do_search()
     
     def _show_about(self):
         """Show the About dialog."""
