@@ -72,6 +72,8 @@ class MainWindow:
         
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="Keyboard Shortcuts", command=self._show_shortcuts)
+        help_menu.add_separator()
         help_menu.add_command(label="About", command=self._show_about)
         
         # Main frame
@@ -96,6 +98,11 @@ class MainWindow:
         
         self.progress = ttk.Progressbar(status_frame, mode='indeterminate', length=200)
         self.progress.pack(side=tk.LEFT, padx=(10, 0))
+        
+        self.stop_btn = ttk.Button(status_frame, text="⏹", width=3, command=self._stop_indexing)
+        self.stop_btn.pack(side=tk.LEFT, padx=(10, 0))
+        self._add_tooltip(self.stop_btn, "Stop background indexing")
+        self.stop_btn.configure(state=tk.DISABLED)
         
         self.drives_var = tk.StringVar(value="Detecting drives...")
         self.drives_label = ttk.Label(status_frame, textvariable=self.drives_var, foreground="gray")
@@ -149,9 +156,12 @@ class MainWindow:
         hint_label = ttk.Label(search_input_frame, text="(use *.ext for glob, or /regex/ for regex)", foreground="gray")
         hint_label.pack(side=tk.LEFT, padx=(10, 0))
         
-        # Results frame to hold treeview and scrollbar together
-        results_frame = ttk.Frame(search_frame)
-        results_frame.pack(fill=tk.BOTH, expand=True)
+        # Results frame with optional preview pane
+        self.results_paned = ttk.PanedWindow(search_frame, orient=tk.HORIZONTAL)
+        self.results_paned.pack(fill=tk.BOTH, expand=True)
+        
+        results_frame = ttk.Frame(self.results_paned)
+        self.results_paned.add(results_frame, weight=3)
         
         # Results treeview with icons
         columns = ("type", "name", "path", "size", "modified")
@@ -194,16 +204,37 @@ class MainWindow:
         self.results_tree.bind("<Double-1>", self._on_double_click)
         # Bind right-click for context menu
         self.results_tree.bind("<Button-3>", self._show_context_menu)
+        # Bind selection change to update preview
+        self.results_tree.bind("<<TreeviewSelect>>", lambda e: self._load_preview())
         
         # Store full paths for items (for reveal functionality)
         self._item_paths = {}
         self._context_menu = None
+        
+        # Preview pane (right side)
+        self.preview_frame = ttk.LabelFrame(self.results_paned, text="Preview", padding="5")
+        self.preview_text = tk.Text(self.preview_frame, wrap=tk.WORD, state=tk.DISABLED, 
+                                     font=('Consolas', 9), height=10, bg='#f8f9fa')
+        self.preview_text.pack(fill=tk.BOTH, expand=True)
+        preview_scroll = ttk.Scrollbar(self.preview_frame, command=self.preview_text.yview)
+        self.preview_text.configure(yscrollcommand=preview_scroll.set)
+        preview_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Empty state label (shown when no results)
         self.empty_state_var = tk.StringVar(value="Type to search across indexed files")
         self.empty_state_label = ttk.Label(search_frame, textvariable=self.empty_state_var, 
                                            font=('Segoe UI', 11), foreground="gray", justify=tk.CENTER)
         self.empty_state_label.pack(pady=40)
+        
+        # Raise empty state above results_paned when visible
+        self.empty_state_label.lift()
+        
+        # Preview toggle button
+        self.preview_visible = tk.BooleanVar(value=False)
+        self.preview_btn = ttk.Button(search_input_frame, text="👁", width=3, 
+                                     command=self._toggle_preview)
+        self.preview_btn.pack(side=tk.LEFT, padx=(5, 0))
+        self._add_tooltip(self.preview_btn, "Toggle preview pane")
         
         # Status bar at bottom of search tab
         status_bar = ttk.Frame(search_frame, relief=tk.SUNKEN, padding="2")
@@ -278,6 +309,7 @@ class MainWindow:
         # Start indexing
         self.bg_indexer.start()
         self.progress.start()
+        self.stop_btn.configure(state=tk.NORMAL)
         
         # Update drives info
         drives = self.bg_indexer.get_drives()
@@ -289,6 +321,14 @@ class MainWindow:
         
         # Schedule periodic stats update
         self._update_stats()
+    
+    def _stop_indexing(self):
+        """Stop the background indexer."""
+        self.bg_indexer.stop()
+        self.progress.stop()
+        self.stop_btn.configure(state=tk.DISABLED)
+        self.status_var.set("Indexing stopped")
+        self.status_bar_var.set("Indexing stopped by user")
     
     def _on_status_update(self, message: str):
         """Handle status updates from background indexer."""
@@ -355,6 +395,7 @@ class MainWindow:
         self.status_var.set(f"Found {len(results)} results")
         self.results_count_var.set(f"{len(results)} results")
         self.status_bar_var.set(f"Search complete — {len(results)} results")
+        self.root.title(f"{APP_NAME} v{APP_VERSION} — {len(results)} results for '{query}'")
         
         # Save to history
         search_type = 'content' if self._content_search_var.get() else 'regex' if self._is_regex_pattern(query) else 'glob' if self.indexer._is_glob_pattern(query) else 'name'
@@ -435,6 +476,7 @@ class MainWindow:
         if not results and query is not None:
             self.empty_state_var.set(f'No results found for "{query}"')
             self.empty_state_label.pack(pady=40)
+            self.empty_state_label.lift()
             return
         else:
             self.empty_state_label.pack_forget()
@@ -503,6 +545,62 @@ class MainWindow:
             return
         self._reveal_in_explorer(full_path)
     
+    def _toggle_preview(self):
+        """Toggle the preview pane visibility."""
+        if self.preview_visible.get():
+            self.results_paned.forget(self.preview_frame)
+            self.preview_visible.set(False)
+        else:
+            self.results_paned.add(self.preview_frame, weight=1)
+            self.preview_visible.set(True)
+            # Load preview for current selection
+            self._load_preview()
+    
+    def _load_preview(self):
+        """Load preview for the selected file."""
+        if not self.preview_visible.get():
+            return
+        full_path = self._get_selected_path()
+        if not full_path:
+            self.preview_text.configure(state=tk.NORMAL)
+            self.preview_text.delete('1.0', tk.END)
+            self.preview_text.insert('1.0', "Select a file to preview its contents.")
+            self.preview_text.configure(state=tk.DISABLED)
+            return
+        
+        path = Path(full_path)
+        if path.is_dir():
+            self.preview_text.configure(state=tk.NORMAL)
+            self.preview_text.delete('1.0', tk.END)
+            self.preview_text.insert('1.0', f"Directory: {path}\n\n(Cannot preview directories)")
+            self.preview_text.configure(state=tk.DISABLED)
+            return
+        
+        # Try to read file preview
+        try:
+            size = path.stat().st_size
+            if size > 100 * 1024:
+                self.preview_text.configure(state=tk.NORMAL)
+                self.preview_text.delete('1.0', tk.END)
+                self.preview_text.insert('1.0', f"File too large to preview ({self._format_size(size)}).\n\nMax preview size: 100 KB")
+                self.preview_text.configure(state=tk.DISABLED)
+                return
+            
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read(5000)
+            
+            self.preview_text.configure(state=tk.NORMAL)
+            self.preview_text.delete('1.0', tk.END)
+            self.preview_text.insert('1.0', content)
+            if len(content) >= 5000:
+                self.preview_text.insert(tk.END, "\n\n... (preview truncated)")
+            self.preview_text.configure(state=tk.DISABLED)
+        except Exception as e:
+            self.preview_text.configure(state=tk.NORMAL)
+            self.preview_text.delete('1.0', tk.END)
+            self.preview_text.insert('1.0', f"Cannot preview file:\n{e}")
+            self.preview_text.configure(state=tk.DISABLED)
+    
     def _reveal_in_explorer(self, full_path: str):
         """Reveal the given path in the system file manager."""
         path = Path(full_path)
@@ -549,13 +647,16 @@ class MainWindow:
             self.status_bar_var.set("Filename copied to clipboard")
     
     def _search_in_directory(self, full_path: str):
-        """Set search to filter results within the selected item's directory."""
+        """Filter current results to only show items in the selected item's directory."""
         path = Path(full_path)
-        directory = path.parent if path.is_file() else path
-        self.search_input.delete(0, tk.END)
-        self.search_input.insert(0, str(directory))
-        self._do_search()
-        self.search_input.focus_set()
+        directory = str(path.parent if path.is_file() else path)
+        if not self._last_results:
+            return
+        filtered = [r for r in self._last_results if str(r.parent_dir).startswith(directory) or str(r.path).startswith(directory)]
+        self._display_results(filtered, None)
+        self.status_var.set(f"Filtered to {len(filtered)} results in {directory}")
+        self.results_count_var.set(f"{len(filtered)} filtered")
+        self.status_bar_var.set(f"Filtered by directory: {directory}")
     
     def _show_context_menu(self, event):
         """Show right-click context menu for search results."""
@@ -699,6 +800,29 @@ class MainWindow:
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export: {e}")
     
+    def _show_shortcuts(self):
+        """Show keyboard shortcuts help dialog."""
+        shortcuts = (
+            "Keyboard Shortcuts\n\n"
+            "Global:\n"
+            "  Ctrl+K     Focus search box\n"
+            "  Esc        Clear search / close popup\n"
+            "  Alt+F4     Exit application\n\n"
+            "Search Results:\n"
+            "  ▲ / ▼      Navigate results\n"
+            "  Enter      Open selected file\n"
+            "  Ctrl+O     Open file\n"
+            "  Ctrl+R     Reveal in Explorer\n"
+            "  Ctrl+C     Copy full path\n\n"
+            "Treemap (Disk Usage tab):\n"
+            "  Ctrl++     Zoom in\n"
+            "  Ctrl+-     Zoom out\n"
+            "  Ctrl+0     Reset view\n"
+            "  Right-drag Pan view\n"
+            "  Scroll     Zoom in/out"
+        )
+        messagebox.showinfo("Keyboard Shortcuts", shortcuts)
+    
     def _show_about(self):
         """Show the About dialog."""
         messagebox.showinfo(
@@ -786,7 +910,9 @@ class MainWindow:
         self.status_bar_var.set("Ready")
         self.empty_state_var.set("Type to search across indexed files")
         self.empty_state_label.pack(pady=40)
+        self.empty_state_label.lift()
         self.search_input.focus_set()
+        self.root.title(f"{APP_NAME} v{APP_VERSION}")
     
     def _on_escape(self, event=None):
         """Handle Escape key: close history popup or clear search results."""
