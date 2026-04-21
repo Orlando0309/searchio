@@ -259,6 +259,16 @@ class MemoryGraphPanel(ttk.Frame):
         self.selected_var = tk.StringVar(value='Selected: -')
         ttk.Label(stats_bar, textvariable=self.selected_var, foreground='gray').pack(side=tk.RIGHT)
         
+        # Quick filter presets
+        filter_presets = ttk.Frame(self)
+        filter_presets.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(filter_presets, text="Quick filters:", font=('Segoe UI', 8)).pack(side=tk.LEFT)
+        for label, ext in [("Images", ".jpg|.png|.gif"), ("Videos", ".mp4|.avi|.mkv"), 
+                           ("Audio", ".mp3|.wav|.flac"), ("Docs", ".pdf|.doc|.txt"),
+                           ("Code", ".py|.js|.html|.css")]:
+            ttk.Button(filter_presets, text=label, width=8,
+                      command=lambda e=ext: self._apply_filter_preset(e)).pack(side=tk.LEFT, padx=(4, 0))
+        
         self.graph.set_click_callback(self._on_node_select)
         
         # Navigation stack
@@ -347,8 +357,19 @@ class MemoryGraphPanel(ttk.Frame):
         if self._nav_stack:
             current = self._nav_stack[-1]
             self.path_var.set(current.path)
-            self.total_var.set(f"Total: {format_size(current.size)}")
+            self.total_var.set(f"Total: {format_size(current.size)}  |  Files: {current.file_count:,}  |  Dirs: {current.dir_count:,}")
             self.back_btn.configure(state=tk.NORMAL if len(self._nav_stack) > 1 else tk.DISABLED)
+    
+    def _apply_filter_preset(self, extensions: str):
+        """Apply a quick filter preset to the filter entry."""
+        exts = extensions.split("|")
+        # Find first matching item
+        for item_id, node in self.graph._node_map.items():
+            if any(node.name.lower().endswith(e) for e in exts):
+                self.filter_var.set(node.name.split('.')[-1])
+                self._on_filter()
+                return
+        self.selected_var.set(f"No {extensions} files found")
     
     def load_drive(self, path: str, root_node: SizeNode):
         """Load a drive for visualization."""
