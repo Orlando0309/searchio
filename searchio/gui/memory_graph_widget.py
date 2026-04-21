@@ -231,6 +231,10 @@ class MemoryGraphPanel(ttk.Frame):
         self.path_label = ttk.Label(toolbar, textvariable=self.path_var, font=('Segoe UI', 10))
         self.path_label.pack(side=tk.LEFT, padx=10)
         
+        # Expand/collapse buttons
+        ttk.Button(toolbar, text='Expand All', command=self._expand_all, width=10).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(toolbar, text='Collapse All', command=self._collapse_all, width=10).pack(side=tk.LEFT, padx=(5, 0))
+        
         # Search filter for memory graph
         self.filter_var = tk.StringVar()
         self.filter_entry = ttk.Entry(toolbar, textvariable=self.filter_var, width=20)
@@ -268,27 +272,58 @@ class MemoryGraphPanel(ttk.Frame):
             self.graph.load_node(prev_node)
             self._update_nav()
     
+    def _expand_all(self):
+        """Expand all items in the tree."""
+        for item in self.graph.tree.get_children():
+            self._expand_recursive(item)
+    
+    def _expand_recursive(self, item):
+        """Expand an item and all its children."""
+        self.graph.tree.item(item, open=True)
+        for child in self.graph.tree.get_children(item):
+            self._expand_recursive(child)
+    
+    def _collapse_all(self):
+        """Collapse all items in the tree."""
+        for item in self.graph.tree.get_children():
+            self._collapse_recursive(item)
+    
+    def _collapse_recursive(self, item):
+        """Collapse an item and all its children."""
+        self.graph.tree.item(item, open=False)
+        for child in self.graph.tree.get_children(item):
+            self._collapse_recursive(child)
+    
     def _on_filter(self, event=None):
         """Filter the tree view based on the filter text."""
         query = self.filter_var.get().lower()
         if not query:
-            # Show all
+            # Collapse all back to root level
             for item in self.graph.tree.get_children():
-                self.graph.tree.item(item, open=False)
+                self._collapse_recursive(item)
+            self.selected_var.set('Selected: -')
             return
         
+        match_count = 0
+        first_match = None
         # Expand and show matching items
         for item_id, node in self.graph._node_map.items():
             if query in node.name.lower():
+                match_count += 1
+                if first_match is None:
+                    first_match = item_id
                 # Ensure parents are visible
                 parent = self.graph.tree.parent(item_id)
                 while parent:
                     self.graph.tree.item(parent, open=True)
                     parent = self.graph.tree.parent(parent)
-                # Select the match
-                self.graph.tree.selection_set(item_id)
-                self.graph.tree.see(item_id)
-                break
+        
+        if first_match:
+            self.graph.tree.selection_set(first_match)
+            self.graph.tree.see(first_match)
+            self.selected_var.set(f"Found {match_count} matches for '{self.filter_var.get()}'")
+        else:
+            self.selected_var.set(f"No matches for '{self.filter_var.get()}'")
     
     def _refresh(self):
         """Refresh the current view."""
