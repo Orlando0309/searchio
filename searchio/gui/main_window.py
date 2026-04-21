@@ -72,6 +72,8 @@ class MainWindow:
         view_menu.add_separator()
         self._dark_mode_var = tk.BooleanVar(value=False)
         view_menu.add_checkbutton(label="Dark Mode", variable=self._dark_mode_var, command=self._toggle_dark_mode)
+        view_menu.add_separator()
+        view_menu.add_command(label="Settings...", command=self._show_settings)
         
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
@@ -359,8 +361,9 @@ class MainWindow:
         if self._search_after_id:
             self.root.after_cancel(self._search_after_id)
         
-        # Schedule new search after 200ms debounce
-        self._search_after_id = self.root.after(200, self._do_search)
+        # Schedule new search after debounce (default 200ms, configurable)
+        debounce_ms = getattr(self, '_debounce_ms', 200)
+        self._search_after_id = self.root.after(debounce_ms, self._do_search)
     
     def _is_regex_pattern(self, query: str) -> bool:
         """Check if query is a regex pattern enclosed in slashes."""
@@ -825,6 +828,57 @@ class MainWindow:
             "  Scroll     Zoom in/out"
         )
         messagebox.showinfo("Keyboard Shortcuts", shortcuts)
+    
+    def _show_settings(self):
+        """Show settings dialog for user preferences."""
+        settings_win = tk.Toplevel(self.root)
+        settings_win.title("Settings")
+        settings_win.geometry("400x300")
+        settings_win.transient(self.root)
+        settings_win.grab_set()
+        
+        # Search settings
+        search_frame = ttk.LabelFrame(settings_win, text="Search", padding="10")
+        search_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        
+        self._debounce_var = tk.IntVar(value=200)
+        ttk.Label(search_frame, text="Search debounce (ms):").pack(anchor=tk.W)
+        ttk.Spinbox(search_frame, from_=50, to=1000, increment=50, textvariable=self._debounce_var, width=10).pack(anchor=tk.W, pady=(0, 5))
+        
+        self._results_limit_var = tk.IntVar(value=100)
+        ttk.Label(search_frame, text="Max results:").pack(anchor=tk.W)
+        ttk.Spinbox(search_frame, from_=10, to=1000, increment=10, textvariable=self._results_limit_var, width=10).pack(anchor=tk.W)
+        
+        # Indexing settings
+        index_frame = ttk.LabelFrame(settings_win, text="Indexing", padding="10")
+        index_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        self._auto_index_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(index_frame, text="Enable background indexing", variable=self._auto_index_var).pack(anchor=tk.W)
+        
+        self._index_interval_var = tk.IntVar(value=300)
+        ttk.Label(index_frame, text="Index interval (seconds):").pack(anchor=tk.W, pady=(5, 0))
+        ttk.Spinbox(index_frame, from_=60, to=3600, increment=60, textvariable=self._index_interval_var, width=10).pack(anchor=tk.W)
+        
+        # Buttons
+        btn_frame = ttk.Frame(settings_win)
+        btn_frame.pack(fill=tk.X, padx=10, pady=(10, 10))
+        ttk.Button(btn_frame, text="Save", command=lambda: self._save_settings(settings_win)).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text="Cancel", command=settings_win.destroy).pack(side=tk.RIGHT)
+    
+    def _save_settings(self, window):
+        """Save settings and close dialog."""
+        # Apply debounce
+        self._debounce_ms = self._debounce_var.get()
+        # Apply auto-indexing
+        if self._auto_index_var.get():
+            if not self.bg_indexer.is_indexing():
+                self.bg_indexer.start()
+        else:
+            self.bg_indexer.stop()
+        window.destroy()
+        self.status_var.set("Settings saved")
+        self.status_bar_var.set("Settings saved")
     
     def _toggle_dark_mode(self):
         """Toggle dark mode for the search tab."""
