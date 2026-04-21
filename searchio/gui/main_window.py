@@ -88,6 +88,7 @@ class MainWindow:
         # Notebook for tabs (Search and Memory/Disk Usage)
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
+        self._restore_active_tab()
         
         # Search tab
         search_frame = ttk.Frame(self.notebook, padding="10")
@@ -249,7 +250,7 @@ class MainWindow:
         self.status_bar_var = tk.StringVar(value="Ready")
         ttk.Label(status_bar, textvariable=self.status_bar_var, font=('Segoe UI', 8), foreground="gray").pack(side=tk.LEFT)
         
-        self.shortcuts_hint = ttk.Label(status_bar, text="Ctrl+K: Search | Esc: Clear | Ctrl+C: Copy Path | ▲▼: Navigate", 
+        self.shortcuts_hint = ttk.Label(status_bar, text="Ctrl+K: Search | Esc: Clear | Ctrl+P: Preview | Ctrl+C: Copy | ▲▼: Navigate", 
                                         font=('Segoe UI', 8), foreground="gray")
         self.shortcuts_hint.pack(side=tk.RIGHT)
         
@@ -296,6 +297,7 @@ class MainWindow:
         # Global keyboard shortcuts
         self.root.bind("<Control-k>", lambda e: self.search_input.focus_set())
         self.root.bind("<Escape>", self._on_escape)
+        self.root.bind("<Control-p>", lambda e: self._toggle_preview())
         self.results_tree.bind("<Control-c>", lambda e: self._copy_selected_path())
         self.results_tree.bind("<Control-o>", lambda e: self._open_file(self._get_selected_path() or ""))
         self.results_tree.bind("<Control-r>", lambda e: self._reveal_in_explorer(self._get_selected_path() or ""))
@@ -308,7 +310,7 @@ class MainWindow:
         # Bind click on main window to close history popup
         self.root.bind("<Button-1>", self._on_root_click)
         
-        # Populate drives on tab change
+        # Populate drives on tab change and save active tab
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
     
     def _start_background_indexing(self):
@@ -438,12 +440,17 @@ class MainWindow:
         icon_map = {
             '.py': '🐍', '.go': '🔷', '.js': '📜', '.ts': '📘',
             '.html': '🌐', '.css': '🎨', '.json': '📋', '.md': '📝',
-            '.txt': '📄', '.pdf': '📕', '.zip': '🗜️', '.jpg': '🖼️',
-            '.png': '🖼️', '.gif': '🖼️', '.mp3': '🎵', '.mp4': '🎬',
-            '.exe': '⚙️', '.sh': '💻', '.bat': '💻', '.rs': '🦀',
-            '.java': '☕', '.c': '🔧', '.cpp': '🔧', '.h': '📄',
-            '.xml': '📋', '.yaml': '📋', '.yml': '📋', '.toml': '📋',
-            '.sql': '🗃️', '.db': '🗃️',
+            '.txt': '📄', '.pdf': '📕', '.zip': '🗜️', '.rar': '🗜️', '.7z': '🗜️',
+            '.jpg': '🖼️', '.jpeg': '🖼️', '.png': '🖼️', '.gif': '🖼️', '.bmp': '🖼️', '.svg': '🖼️', '.webp': '🖼️',
+            '.mp3': '🎵', '.wav': '🎵', '.flac': '🎵', '.aac': '🎵', '.ogg': '🎵',
+            '.mp4': '🎬', '.avi': '🎬', '.mkv': '🎬', '.mov': '🎬', '.wmv': '🎬',
+            '.exe': '⚙️', '.dll': '⚙️', '.so': '⚙️', '.dylib': '⚙️',
+            '.sh': '💻', '.bat': '💻', '.cmd': '💻', '.ps1': '💻',
+            '.rs': '🦀', '.java': '☕', '.c': '🔧', '.cpp': '🔧', '.h': '📄', '.hpp': '📄',
+            '.xml': '📋', '.yaml': '📋', '.yml': '📋', '.toml': '📋', '.ini': '📋', '.cfg': '📋',
+            '.sql': '🗃️', '.db': '🗃️', '.sqlite': '🗃️', '.sqlite3': '🗃️',
+            '.doc': '📝', '.docx': '📝', '.xls': '📊', '.xlsx': '📊', '.ppt': '📊', '.pptx': '📊',
+            '.csv': '📊', '.tsv': '📊',
         }
         
         return icon_map.get(extension.lower(), '📄')
@@ -725,8 +732,34 @@ class MainWindow:
     def _on_tab_changed(self, event):
         """Handle tab change event."""
         selected_tab = self.notebook.tab(self.notebook.select(), "text")
+        self._save_active_tab(selected_tab)
         if selected_tab == "Memory/Disk Usage":
             self._populate_drive_combo()
+    
+    def _save_active_tab(self, tab_name: str):
+        """Save the currently active tab to config."""
+        from ..config import CONFIG_DIR
+        try:
+            tab_file = CONFIG_DIR / "active_tab.txt"
+            with open(tab_file, 'w') as f:
+                f.write(tab_name)
+        except Exception:
+            pass
+    
+    def _restore_active_tab(self):
+        """Restore the last active tab from config."""
+        from ..config import CONFIG_DIR
+        try:
+            tab_file = CONFIG_DIR / "active_tab.txt"
+            if tab_file.exists():
+                with open(tab_file, 'r') as f:
+                    tab_name = f.read().strip()
+                for i in range(self.notebook.index('end')):
+                    if self.notebook.tab(i, "text") == tab_name:
+                        self.notebook.select(i)
+                        break
+        except Exception:
+            pass
     
     def _analyze_drive(self):
         """Start analysis of selected drive."""
@@ -837,6 +870,7 @@ class MainWindow:
             "Keyboard Shortcuts\n\n"
             "Global:\n"
             "  Ctrl+K     Focus search box\n"
+            "  Ctrl+P     Toggle preview pane\n"
             "  Esc        Clear search / close popup\n"
             "  Alt+F4     Exit application\n\n"
             "Search Results:\n"
